@@ -3,6 +3,9 @@ import requests
 import urllib.parse
 import pandas as pd
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+
 # Clio API details (retrieved from Streamlit secrets)
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
@@ -45,6 +48,7 @@ def get_access_token(auth_code):
 def clio_api_request(endpoint, access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
     response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers)
+    st.write(f"API Response Status: {response.status_code}")
     if response.status_code == 200:
         return response.json()
     else:
@@ -54,17 +58,21 @@ def clio_api_request(endpoint, access_token):
 # App title
 st.title("Clio Conflict Check Tool")
 
+# Log query parameters
+logging.info(f"Query parameters: {st.experimental_get_query_params()}")
+
 # Check for 'code' parameter in URL
 query_params = st.experimental_get_query_params()
 if 'code' in query_params:
-    auth_code = query_params['code'][0]
-    st.success("Authorization code received!")
+    auth_code = urllib.parse.unquote(query_params['code'][0])
+    logging.info(f"Received auth code: {auth_code}")
+    st.success(f"Authorization code received: {auth_code[:5]}...{auth_code[-5:]}")
     
     # Use the auth_code to get the access token
     token_data = get_access_token(auth_code)
     if token_data and 'access_token' in token_data:
         access_token = token_data['access_token']
-        st.success("Access token retrieved successfully!")
+        st.success(f"Access token retrieved: {access_token[:5]}...{access_token[-5:]}")
         
         # Store the access token in session state
         st.session_state['access_token'] = access_token
@@ -76,12 +84,14 @@ if 'code' in query_params:
         st.error("Failed to retrieve access token.")
 elif 'access_token' in st.session_state:
     st.success("You are authorized!")
+    st.info(f"Current access token: {st.session_state['access_token'][:5]}...{st.session_state['access_token'][-5:]}")
     if st.button("Fetch User Data"):
-        user_data = clio_api_request('users/who_am_i', st.session_state['access_token'])
-        if user_data:
-            st.write("User Data:", user_data)
-        else:
-            st.error("Failed to fetch user data.")
+        with st.spinner("Fetching user data..."):
+            user_data = clio_api_request('users/who_am_i', st.session_state['access_token'])
+            if user_data:
+                st.json(user_data)
+            else:
+                st.error("Failed to fetch user data. Please check the console for more details.")
 else:
     st.write("Follow these steps to authorize and use the Clio Conflict Check Tool:")
     
@@ -96,3 +106,8 @@ else:
 st.sidebar.title("App Info")
 st.sidebar.info(f"Using Client ID: {CLIENT_ID[:5]}...{CLIENT_ID[-5:]}")
 st.sidebar.info(f"Redirect URI: {REDIRECT_URI}")
+
+# Debug Information
+st.sidebar.title("Debug Info")
+st.sidebar.json(st.session_state)
+st.sidebar.json(dict(st.experimental_get_query_params()))
