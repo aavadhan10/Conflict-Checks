@@ -2,11 +2,11 @@ import streamlit as st
 import pandas as pd
 import requests
 
-# Clio API details
+# Clio API details (retrieved from Streamlit secrets)
 CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
-CLIENT_ID = st.secrets["83PaxXzo6vtiBslj66UfRgK501k3NZmbO9OHbSVP"]  # Client ID from Clio
-CLIENT_SECRET = st.secrets["HxZ6kwb4tyiDpNDuK8cK1jbJU5iCv6sMj1ymdkqN"]  # Client Secret from Clio
-REDIRECT_URI = st.secrets["http://127.0.0.1:8501/redirect"]  # Redirect URI that matches the one in Clio
+CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]  # Client ID from Streamlit secrets
+CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]  # Client Secret from Streamlit secrets
+REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Redirect URI from Streamlit secrets
 AUTH_URL = "https://app.clio.com/oauth/authorize"
 TOKEN_URL = "https://app.clio.com/oauth/token"
 
