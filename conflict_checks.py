@@ -26,15 +26,17 @@ def generate_state():
 
 def get_authorization_url():
     """Generate the authorization URL for the user to authorize the app."""
+    state = generate_state()
     params = {
         "response_type": "code",
         "client_id": CLIENT_ID,
         "redirect_uri": REDIRECT_URI,
         "scope": "openid profile email contacts.read matters.read",  # Adjust scopes as needed
-        "state": st.session_state.get('oauth_state', generate_state()),  # Generate or retrieve state
+        "state": state,
         "approval_prompt": "auto"
     }
-    st.session_state['oauth_state'] = params['state']  # Save state for verification
+    # Store state in query params to persist across redirects
+    st.experimental_set_query_params(oauth_state=state)
     url = f"{AUTH_URL}?{urllib.parse.urlencode(params)}"
     return url
 
@@ -197,9 +199,15 @@ def perform_advanced_conflict_check(new_client_info, contacts, matters):
 # Streamlit app
 st.title("Advanced Clio Conflict Check Tool")
 
+# Retrieve query parameters
+query_params = st.experimental_get_query_params()
+
+# Load oauth_state from query params if not in session_state
+if 'oauth_state' not in st.session_state and 'oauth_state' in query_params:
+    st.session_state['oauth_state'] = query_params['oauth_state'][0]
+
 # Check if we have an authorization code in the URL parameters
 if 'code' not in st.session_state:
-    query_params = st.experimental_get_query_params()
     if 'code' in query_params and 'state' in query_params:
         # Verify state parameter for security
         if query_params['state'][0] == st.session_state.get('oauth_state', ''):
