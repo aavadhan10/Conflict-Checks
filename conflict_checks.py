@@ -3,13 +3,21 @@ import requests
 import urllib.parse
 import pandas as pd
 
-# Clio API details (retrieved from Streamlit secrets)
-CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
+#Clio API details (retrieved from Streamlit secrets)
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
-REDIRECT_URI = "https://conflictchecks.streamlit.app/redirect"
+REDIRECT_URI = st.secrets["REDIRECT_URI"]
+
+# Clio API URLs
+CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
 AUTH_URL = "https://app.clio.com/oauth/authorize"
 TOKEN_URL = "https://app.clio.com/oauth/token"
+
+# Streamlit App Layout
+st.title("Clio Conflict Check Tool")
+
+# Display Client ID for verification
+st.write(f"Using Client ID: {CLIENT_ID[:5]}...{CLIENT_ID[-5:]}")
 
 # Function to get authorization URL
 def get_authorization_url():
@@ -49,13 +57,11 @@ def clio_api_request(endpoint, access_token):
         st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
         return None
 
-# Streamlit App Layout
-st.title("Clio Conflict Check Tool")
-
 st.write("Follow these steps to authorize and use the Clio Conflict Check Tool:")
 
 # Step 1: Display the Authorization URL
 st.header("Step 1: Authorize the App")
+st.markdown("**Important:** Please log out of Clio in your browser before proceeding.")
 auth_url = get_authorization_url()
 st.markdown(f"1. Click this link to authorize the app with Clio: [Authorize with Clio]({auth_url})")
 st.markdown("2. Log in to your Clio account if prompted.")
