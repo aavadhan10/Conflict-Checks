@@ -3,21 +3,15 @@ import requests
 import urllib.parse
 import pandas as pd
 
-#Clio API details (retrieved from Streamlit secrets)
+# Clio API details (retrieved from Streamlit secrets)
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
-REDIRECT_URI = st.secrets["REDIRECT_URI"]
+REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Should be "https://conflictchecks.streamlit.app"
 
 # Clio API URLs
 CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
 AUTH_URL = "https://app.clio.com/oauth/authorize"
 TOKEN_URL = "https://app.clio.com/oauth/token"
-
-# Streamlit App Layout
-st.title("Clio Conflict Check Tool")
-
-# Display Client ID for verification
-st.write(f"Using Client ID: {CLIENT_ID[:5]}...{CLIENT_ID[-5:]}")
 
 # Function to get authorization URL
 def get_authorization_url():
@@ -57,45 +51,41 @@ def clio_api_request(endpoint, access_token):
         st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
         return None
 
-st.write("Follow these steps to authorize and use the Clio Conflict Check Tool:")
+# App title
+st.title("Clio Conflict Check Tool")
 
-# Step 1: Display the Authorization URL
-st.header("Step 1: Authorize the App")
-st.markdown("**Important:** Please log out of Clio in your browser before proceeding.")
-auth_url = get_authorization_url()
-st.markdown(f"1. Click this link to authorize the app with Clio: [Authorize with Clio]({auth_url})")
-st.markdown("2. Log in to your Clio account if prompted.")
-st.markdown("3. Grant the requested permissions.")
-st.markdown("4. You will be redirected to a page with a URL containing a 'code' parameter.")
-st.markdown("5. Copy the entire URL of that page.")
-
-# Step 2: Input the redirect URL
-st.header("Step 2: Enter the Redirect URL")
-st.markdown("Paste the entire URL you were redirected to:")
-redirect_url = st.text_input("Redirect URL")
-
-if redirect_url:
-    # Extract the authorization code from the redirect URL
-    parsed_url = urllib.parse.urlparse(redirect_url)
-    query_params = urllib.parse.parse_qs(parsed_url.query)
-    auth_code = query_params.get('code', [None])[0]
+# Check for 'code' parameter in URL
+query_params = st.experimental_get_query_params()
+if 'code' in query_params:
+    auth_code = query_params['code'][0]
+    st.success("Authorization code received!")
     
-    if auth_code:
-        # Step 3: Get access token using the authorization code
-        token_data = get_access_token(auth_code)
-        if token_data and 'access_token' in token_data:
-            access_token = token_data['access_token']
-            st.success("Access token retrieved successfully!")
-            
-            # Step 4: Use the access token to fetch client data or matters
-            st.header("Step 3: Fetch and Display Data")
-            if st.button("Fetch User Data"):
-                user_data = clio_api_request('users/who_am_i', access_token)
-                if user_data:
-                    st.write("User Data:", user_data)
-                else:
-                    st.error("Failed to fetch user data. Please check your authorization and try again.")
-        else:
-            st.error("Failed to retrieve access token. Please check your authorization code and try again.")
+    # Use the auth_code to get the access token
+    token_data = get_access_token(auth_code)
+    if token_data and 'access_token' in token_data:
+        access_token = token_data['access_token']
+        st.success("Access token retrieved successfully!")
+        
+        # Now you can use this access_token to make API calls
+        if st.button("Fetch User Data"):
+            user_data = clio_api_request('users/who_am_i', access_token)
+            if user_data:
+                st.write("User Data:", user_data)
+            else:
+                st.error("Failed to fetch user data.")
     else:
-        st.error("No authorization code found in the redirect URL. Please ensure you copied the entire URL.")
+        st.error("Failed to retrieve access token.")
+else:
+    st.write("Follow these steps to authorize and use the Clio Conflict Check Tool:")
+    
+    # Step 1: Display the Authorization URL
+    st.header("Step 1: Authorize the App")
+    st.markdown("**Important:** Please log out of Clio in your browser before proceeding.")
+    auth_url = get_authorization_url()
+    st.markdown(f"Click this link to authorize the app with Clio: [Authorize with Clio]({auth_url})")
+    st.markdown("After authorizing, you will be redirected back to this app automatically.")
+
+# Display some app info
+st.sidebar.title("App Info")
+st.sidebar.info(f"Using Client ID: {CLIENT_ID[:5]}...{CLIENT_ID[-5:]}")
+st.sidebar.info(f"Redirect URI: {REDIRECT_URI}")
