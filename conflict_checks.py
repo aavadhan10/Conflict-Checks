@@ -224,7 +224,4 @@ if st.sidebar.button("Refresh Clio Data"):
 if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
     st.sidebar.title("Token Information")
     st.sidebar.write(f"Token expires at: {st.session_state['token_expiry']}")
-    
-    # Ensure 'token_expiry' is initialized properly
-    if st.session_state
 
