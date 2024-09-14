@@ -49,23 +49,45 @@ if not st.session_state['access_token']:
     # Retrieve query parameters
     query_params = st.experimental_get_query_params()
 
+    # Debugging: Display query params and session state
+    # You can comment these out if not needed
+    # st.write("Query Parameters:", query_params)
+    # st.write("Session State:", st.session_state)
+
     # Check if we have an authorization code in the URL parameters
-    if 'code' in query_params:
+    if 'code' in query_params and 'token_exchanged' not in st.session_state:
+        # Verify state parameter
+        if 'state' in query_params:
+            returned_state = query_params['state'][0]
+            if returned_state != st.session_state.get('oauth_state'):
+                st.error("State mismatch. Possible CSRF attack.")
+                st.stop()
+        else:
+            st.error("No state parameter returned. Possible CSRF attack.")
+            st.stop()
+
         code = query_params['code'][0]
         # Fetch the token using the authorization code
-        token = oauth.fetch_token(
-            TOKEN_URL,
-            code=code,
-            include_client_id=True,
-            client_secret=CLIENT_SECRET,
-        )
+        try:
+            token = oauth.fetch_token(
+                TOKEN_URL,
+                code=code,
+                include_client_id=True,
+                client_secret=CLIENT_SECRET,
+            )
+        except Exception as e:
+            st.error(f"Failed to fetch token: {e}")
+            st.stop()
+
         # Store tokens and expiry in session_state
         st.session_state['access_token'] = token['access_token']
         st.session_state['refresh_token'] = token.get('refresh_token')
         st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token.get('expires_in', 3600))
+        st.session_state['token_exchanged'] = True  # Add this flag
         st.success("Authentication successful!")
         # Remove 'code' from query parameters to clean up the URL
         st.experimental_set_query_params()
+        st.experimental_rerun()  # Rerun to ensure 'code' is removed
     else:
         # Redirect the user to the Clio authorization page
         authorization_url, state = oauth.create_authorization_url(AUTH_URL)
@@ -85,15 +107,19 @@ else:
                 'token_type': 'Bearer',
                 'expires_in': 3600,
             })
-            token = oauth.refresh_token(
-                TOKEN_URL,
-                refresh_token=st.session_state['refresh_token'],
-                client_id=CLIENT_ID,
-                client_secret=CLIENT_SECRET,
-            )
-            st.session_state['access_token'] = token['access_token']
-            st.session_state['refresh_token'] = token.get('refresh_token')
-            st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token.get('expires_in', 3600))
+            try:
+                token = oauth.refresh_token(
+                    TOKEN_URL,
+                    refresh_token=st.session_state['refresh_token'],
+                    client_id=CLIENT_ID,
+                    client_secret=CLIENT_SECRET,
+                )
+                st.session_state['access_token'] = token['access_token']
+                st.session_state['refresh_token'] = token.get('refresh_token')
+                st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token.get('expires_in', 3600))
+            except Exception as e:
+                st.error(f"Failed to refresh token: {e}")
+                st.stop()
         return st.session_state['access_token']
 
     def clio_api_request(endpoint, params=None):
@@ -208,7 +234,7 @@ else:
     # Input for new client details
     st.header("New Client Details")
     new_client_name = st.text_input("Full Legal Name")
-    new_client_dob = st.date_input("Date of Birth")
+    new_client_dob = st.date_input("Date of Birth", value=None)
     new_client_address = st.text_input("Address")
     new_client_phone = st.text_input("Phone Number")
 
