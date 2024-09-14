@@ -1,14 +1,13 @@
 import streamlit as st
 import requests
 import logging
-import sqlite3
 from urllib.parse import urlencode
 from datetime import datetime, timedelta
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
-# Clio API URLs (Adjust these as needed)
+# Clio API URLs
 CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
 AUTH_URL = "https://app.clio.com/oauth/authorize"
 TOKEN_URL = "https://app.clio.com/oauth/token"
@@ -16,56 +15,8 @@ TOKEN_URL = "https://app.clio.com/oauth/token"
 # Retrieve credentials from secrets
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
-REDIRECT_URI = st.secrets["REDIRECT_URI"]
+REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Should match your app's URL
 
-# SQLite Database Initialization
-def init_db():
-    conn = sqlite3.connect('clio_data.db')
-    c = conn.cursor()
-    
-    # Create tables for contacts and matters if they don't exist
-    c.execute('''CREATE TABLE IF NOT EXISTS contacts (
-        id INTEGER PRIMARY KEY,
-        name TEXT,
-        email TEXT,
-        address TEXT,
-        phone TEXT,
-        custom_fields TEXT
-    )''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS matters (
-        id INTEGER PRIMARY KEY,
-        client_name TEXT,
-        display_number TEXT,
-        description TEXT
-    )''')
-    
-    conn.commit()
-    conn.close()
-
-# Store data in the SQLite database
-def store_data_in_db(contacts, matters):
-    conn = sqlite3.connect('clio_data.db')
-    c = conn.cursor()
-    
-    # Insert contacts data
-    contact_data = [(contact['id'], contact['name'], contact.get('email', ''), 
-                     contact.get('address', ''), contact.get('phone', ''), str(contact.get('custom_fields', '')))
-                    for contact in contacts]
-    
-    c.executemany('''INSERT OR REPLACE INTO contacts VALUES (?, ?, ?, ?, ?, ?)''', contact_data)
-    
-    # Insert matters data
-    matter_data = [(matter['id'], matter.get('client', {}).get('name', ''), 
-                    matter['display_number'], matter.get('description', ''))
-                   for matter in matters]
-    
-    c.executemany('''INSERT OR REPLACE INTO matters VALUES (?, ?, ?, ?)''', matter_data)
-    
-    conn.commit()
-    conn.close()
-
-# OAuth and Token Management Functions (from your provided code)
 def get_authorization_url():
     """Generate the authorization URL to get user consent"""
     params = {
@@ -86,6 +37,10 @@ def fetch_token(authorization_code):
         "redirect_uri": REDIRECT_URI
     }
     response = requests.post(TOKEN_URL, data=data)
+    
+    # Log the API response for debugging
+    logging.info(f"Response status code: {response.status_code}")
+    logging.info(f"Response text: {response.text}")
     
     if response.status_code == 200:
         token_data = response.json()
@@ -116,11 +71,13 @@ def refresh_access_token():
     if response.status_code == 200:
         token_data = response.json()
         st.session_state['access_token'] = token_data['access_token']
+        # Update the refresh token if it has changed
         st.session_state['refresh_token'] = token_data.get('refresh_token', refresh_token)
         st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
         return token_data['access_token']
     else:
         st.error(f"Failed to refresh token: {response.status_code}, {response.text}")
+        # Clear tokens to force re-authentication
         st.session_state.pop('access_token', None)
         st.session_state.pop('refresh_token', None)
         st.session_state.pop('token_expiry', None)
@@ -135,8 +92,10 @@ def get_valid_token():
         if token_expiry > datetime.now():
             return access_token
         else:
+            # Token expired, refresh it
             return refresh_access_token()
     else:
+        # No valid token, prompt for authorization
         auth_url = get_authorization_url()
         st.markdown(f"Please [authorize the app]({auth_url}) to continue.")
         return None
@@ -152,6 +111,7 @@ def clio_api_request(endpoint, params=None):
         return response.json()
     elif response.status_code == 401:
         st.error("Token expired or invalid.")
+        # Clear the token to force re-authentication
         st.session_state.pop('access_token', None)
         st.session_state.pop('refresh_token', None)
         st.session_state.pop('token_expiry', None)
@@ -168,6 +128,7 @@ def fetch_all_pages_cached(endpoint):
         data = clio_api_request(endpoint, params)
         if data and 'data' in data:
             all_data.extend(data['data'])
+            logging.info(f"Fetched {len(data['data'])} items from {endpoint}, page {params['page']}")
             
             if data.get('meta', {}).get('paging', {}).get('next'):
                 params['page'] += 1
@@ -178,30 +139,73 @@ def fetch_all_pages_cached(endpoint):
     
     return all_data
 
-# Perform conflict checks
-def perform_advanced_conflict_check_from_db(new_client_info):
-    conn = sqlite3.connect('clio_data.db')
-    c = conn.cursor()
-    
+def get_custom_field_value(contact, field_name):
+    for field in contact.get('custom_field_values', []):
+        if field['field_name'] == field_name:
+            return field['value']
+    return None
+
+def perform_advanced_conflict_check(new_client_info, contacts, matters):
     conflicts = []
     
-    # Conflict check for contacts
-    c.execute('SELECT * FROM contacts WHERE LOWER(name) LIKE ?', (f"%{new_client_info['name'].lower()}%",))
-    contact_matches = c.fetchall()
-    for match in contact_matches:
-        conflicts.append(f"Name match: {match[1]} (ID: {match[0]})")
+    for contact in contacts:
+        # Check full legal name
+        if new_client_info['name'].lower() in contact['name'].lower():
+            conflicts.append(f"Name match: {contact['name']}")
+        
+        # Check maiden/married names
+        maiden_name = get_custom_field_value(contact, 'Maiden Name')
+        if maiden_name and new_client_info['name'].lower() in maiden_name.lower():
+            conflicts.append(f"Maiden name match: {contact['name']} (Maiden: {maiden_name})")
+        
+        # Check nicknames
+        nicknames = get_custom_field_value(contact, 'Nicknames')
+        if nicknames:
+            for nickname in nicknames.split(','):
+                if nickname.strip().lower() in new_client_info['name'].lower():
+                    conflicts.append(f"Nickname match: {contact['name']} (Nickname: {nickname})")
+        
+        # Check date of birth
+        dob = get_custom_field_value(contact, 'Date of Birth')
+        if dob and dob == new_client_info['dob']:
+            conflicts.append(f"Date of birth match: {contact['name']} (DOB: {dob})")
+        
+        # Check address
+        if 'address' in contact and 'address' in new_client_info:
+            if contact['address'].get('street', '').lower() == new_client_info['address'].lower():
+                conflicts.append(f"Address match: {contact['name']}")
+        
+        # Check phone number
+        for phone in contact.get('phone_numbers', []):
+            if phone['number'] == new_client_info['phone']:
+                conflicts.append(f"Phone number match: {contact['name']}")
+        
+        # Business-specific checks
+        if contact['type'] == 'Company':
+            # Check officers and directors
+            officers = get_custom_field_value(contact, 'Officers and Directors')
+            if officers and new_client_info['name'].lower() in officers.lower():
+                conflicts.append(f"Officer/Director match: {contact['name']}")
+            
+            # Check partners
+            partners = get_custom_field_value(contact, 'Partners')
+            if partners and new_client_info['name'].lower() in partners.lower():
+                conflicts.append(f"Partner match: {contact['name']}")
+            
+            # Check trade names
+            trade_names = get_custom_field_value(contact, 'Trade Names')
+            if trade_names and new_client_info['name'].lower() in trade_names.lower():
+                conflicts.append(f"Trade name match: {contact['name']}")
     
-    # Conflict check for matters (e.g., opposing parties)
-    c.execute('SELECT * FROM matters WHERE LOWER(client_name) LIKE ?', (f"%{new_client_info['name'].lower()}%",))
-    matter_matches = c.fetchall()
-    for match in matter_matches:
-        conflicts.append(f"Opposing party match in matter: {match[2]} - {match[3]}")
-    
-    conn.close()
+    # Check matters for opposing parties
+    for matter in matters:
+        if 'client' in matter and 'name' in matter['client']:
+            if new_client_info['name'].lower() in matter['client']['name'].lower():
+                conflicts.append(f"Opposing party match in matter: {matter.get('display_number', 'N/A')} - {matter.get('description', 'N/A')}")
     
     return conflicts
 
-# Streamlit App UI
+# Streamlit app
 st.title("Advanced Clio Conflict Check Tool")
 
 # Capture the authorization code from URL parameters
@@ -218,4 +222,60 @@ if 'access_token' in st.session_state:
         contacts = fetch_all_pages_cached('contacts')
         matters = fetch_all_pages_cached('matters')
     if contacts and matters:
-        store_data
+        st.success(f"Fetched {len(contacts)} contacts and {len(matters)} matters")
+    else:
+        st.error("Failed to fetch data. Please check your Clio API credentials.")
+else:
+    get_valid_token()  # This will display the authorization link if needed
+
+# Input for new client details
+st.header("New Client Details")
+new_client_name = st.text_input("Full Legal Name")
+new_client_dob = st.date_input("Date of Birth")
+new_client_address = st.text_input("Address")
+new_client_phone = st.text_input("Phone Number")
+
+if st.button("Run Advanced Conflict Check"):
+    if new_client_name:
+        new_client_info = {
+            'name': new_client_name,
+            'dob': new_client_dob.strftime('%Y-%m-%d') if new_client_dob else '',
+            'address': new_client_address,
+            'phone': new_client_phone
+        }
+        conflicts = perform_advanced_conflict_check(new_client_info, contacts, matters)
+        
+        if conflicts:
+            st.warning("Potential conflicts detected:")
+            for conflict in conflicts:
+                st.write(conflict)
+        else:
+            st.success("No conflicts detected.")
+    else:
+        st.error("Please enter at least the client's full legal name.")
+
+# Display data statistics
+st.sidebar.title("Data Statistics")
+st.sidebar.write(f"Number of contacts: {len(contacts) if 'contacts' in locals() else 0}")
+st.sidebar.write(f"Number of matters: {len(matters) if 'matters' in locals() else 0}")
+
+# Optional: Add a refresh data button
+if st.sidebar.button("Refresh Clio Data"):
+    fetch_all_pages_cached.clear()  # Clear the cached data
+    st.experimental_rerun()
+
+# Display token information in sidebar
+if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
+    st.sidebar.title("Token Information")
+    st.sidebar.write(f"Token expires at: {st.session_state['token_expiry']}")
+    
+    # Ensure 'token_expiry' is initialized properly
+    if st.session_state['token_expiry'] and isinstance(st.session_state['token_expiry'], datetime):
+        if st.session_state['token_expiry'] > datetime.now():
+            st.sidebar.success("Token is valid")
+        else:
+            st.sidebar.warning("Token has expired (will be refreshed automatically)")
+    else:
+        st.sidebar.warning("Token expiry is not properly set.")
+else:
+    st.sidebar.warning("No access token available.")
