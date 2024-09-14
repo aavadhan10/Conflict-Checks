@@ -4,6 +4,7 @@ import pandas as pd
 import logging
 from datetime import datetime, timedelta
 from authlib.integrations.requests_client import OAuth2Session
+import uuid
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -31,42 +32,42 @@ def get_oauth_session(state=None, token=None):
 # Streamlit app
 st.title("Advanced Clio Conflict Check Tool")
 
-# Initialize session_state variables
-if 'oauth_state' not in st.session_state:
-    st.session_state['oauth_state'] = None
+# Initialize session_state variables only if they don't exist
 if 'access_token' not in st.session_state:
     st.session_state['access_token'] = None
 if 'refresh_token' not in st.session_state:
     st.session_state['refresh_token'] = None
 if 'token_expiry' not in st.session_state:
     st.session_state['token_expiry'] = None
+if 'token_exchanged' not in st.session_state:
+    st.session_state['token_exchanged'] = False
+if 'oauth_state' not in st.session_state:
+    st.session_state['oauth_state'] = None
 
 # Check if we have an access token
 if not st.session_state['access_token']:
-    # Create an OAuth2Session
-    oauth = get_oauth_session()
-
     # Retrieve query parameters
     query_params = st.experimental_get_query_params()
 
-    # Debugging: Display query params and session state
-    # You can comment these out if not needed
-    # st.write("Query Parameters:", query_params)
-    # st.write("Session State:", st.session_state)
-
-    # Check if we have an authorization code in the URL parameters
-    if 'code' in query_params and 'token_exchanged' not in st.session_state:
+    # If we have an authorization code
+    if 'code' in query_params and not st.session_state['token_exchanged']:
         # Verify state parameter
-        if 'state' in query_params:
-            returned_state = query_params['state'][0]
-            if returned_state != st.session_state.get('oauth_state'):
-                st.error("State mismatch. Possible CSRF attack.")
-                st.stop()
-        else:
-            st.error("No state parameter returned. Possible CSRF attack.")
+        returned_state = query_params.get('state', [None])[0]
+        stored_state = st.session_state.get('oauth_state')
+
+        # Debugging statements
+        st.write("Returned state:", returned_state)
+        st.write("Stored state:", stored_state)
+
+        if returned_state != stored_state:
+            st.error("State mismatch. Possible CSRF attack.")
             st.stop()
 
         code = query_params['code'][0]
+
+        # Create an OAuth2Session with the stored state
+        oauth = get_oauth_session(state=stored_state)
+
         # Fetch the token using the authorization code
         try:
             token = oauth.fetch_token(
@@ -82,16 +83,28 @@ if not st.session_state['access_token']:
         # Store tokens and expiry in session_state
         st.session_state['access_token'] = token['access_token']
         st.session_state['refresh_token'] = token.get('refresh_token')
-        st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token.get('expires_in', 3600))
+        expires_in = token.get('expires_in', 3600)
+        st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=expires_in)
         st.session_state['token_exchanged'] = True  # Add this flag
         st.success("Authentication successful!")
-        # Remove 'code' from query parameters to clean up the URL
+
+        # Remove 'code' and 'state' from query parameters to clean up the URL
         st.experimental_set_query_params()
         st.experimental_rerun()  # Rerun to ensure 'code' is removed
     else:
-        # Redirect the user to the Clio authorization page
-        authorization_url, state = oauth.create_authorization_url(AUTH_URL)
+        # Create an OAuth2Session
+        oauth = get_oauth_session()
+
+        # Generate a state parameter
+        state = str(uuid.uuid4())
         st.session_state['oauth_state'] = state
+
+        # Generate the authorization URL with the custom state
+        authorization_url, _ = oauth.create_authorization_url(
+            AUTH_URL,
+            state=state,
+        )
+
         st.write("Please authorize the application to access Clio data.")
         st.markdown(f"[Click here to authorize]({authorization_url})")
         st.stop()
@@ -116,7 +129,8 @@ else:
                 )
                 st.session_state['access_token'] = token['access_token']
                 st.session_state['refresh_token'] = token.get('refresh_token')
-                st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token.get('expires_in', 3600))
+                expires_in = token.get('expires_in', 3600)
+                st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=expires_in)
             except Exception as e:
                 st.error(f"Failed to refresh token: {e}")
                 st.stop()
@@ -276,3 +290,4 @@ else:
             st.sidebar.success("Token is valid")
         else:
             st.sidebar.warning("Token has expired (will be refreshed on next API call)")
+
