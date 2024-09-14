@@ -10,9 +10,9 @@ import uuid
 logging.basicConfig(level=logging.INFO)
 
 # Retrieve credentials from st.secrets
-CLIENT_ID = st.secrets["clio"]["client_id"]
-CLIENT_SECRET = st.secrets["clio"]["client_secret"]
-REDIRECT_URI = st.secrets["clio"]["redirect_uri"]
+CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
+CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
+REDIRECT_URI = st.secrets["REDIRECT_URI"]
 
 # Clio API URLs
 CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
