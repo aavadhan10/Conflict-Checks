@@ -32,15 +32,21 @@ def get_new_token():
     else:
         st.error(f"Failed to get new token: {response.status_code}, {response.text}")
         return None
-
+        
 def get_valid_token():
     """Function to get a valid token, refreshing if necessary"""
-    if 'access_token' not in st.session_state or 'token_expiry' not in st.session_state:
+    token_expiry = st.session_state.get('token_expiry')
+    access_token = st.session_state.get('access_token')
+
+    if not access_token or not token_expiry:
+        st.info("No valid token or token expiry found. Fetching a new token.")
         return get_new_token()
-    elif st.session_state['token_expiry'] <= datetime.now():
+    elif token_expiry <= datetime.now():
+        st.info("Token has expired. Fetching a new token.")
         return get_new_token()
     else:
-        return st.session_state['access_token']
+        st.info("Using cached access token.")
+        return access_token
 
 def clio_api_request(endpoint, params=None):
     token = get_valid_token()
