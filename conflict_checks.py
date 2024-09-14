@@ -28,7 +28,7 @@ def get_authorization_url():
     return f"{AUTH_URL}?{urlencode(params)}"
 
 def fetch_token(authorization_code):
-    """Exchange authorization code for access token"""
+    """Exchange authorization code for access and refresh tokens"""
     data = {
         "grant_type": "authorization_code",
         "client_id": CLIENT_ID,
@@ -45,24 +45,60 @@ def fetch_token(authorization_code):
     if response.status_code == 200:
         token_data = response.json()
         st.session_state['access_token'] = token_data['access_token']
+        st.session_state['refresh_token'] = token_data['refresh_token']
         st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
         return token_data['access_token']
     else:
         st.error(f"Failed to fetch token: {response.status_code}, {response.text}")
         return None
 
+def refresh_access_token():
+    """Refresh the access token using the refresh token"""
+    refresh_token = st.session_state.get('refresh_token')
+    if not refresh_token:
+        st.error("No refresh token available. Please reauthorize.")
+        return None
+
+    data = {
+        "grant_type": "refresh_token",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "refresh_token": refresh_token,
+        "redirect_uri": REDIRECT_URI
+    }
+    response = requests.post(TOKEN_URL, data=data)
+    
+    if response.status_code == 200:
+        token_data = response.json()
+        st.session_state['access_token'] = token_data['access_token']
+        # Update the refresh token if it has changed
+        st.session_state['refresh_token'] = token_data.get('refresh_token', refresh_token)
+        st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
+        return token_data['access_token']
+    else:
+        st.error(f"Failed to refresh token: {response.status_code}, {response.text}")
+        # Clear tokens to force re-authentication
+        st.session_state.pop('access_token', None)
+        st.session_state.pop('refresh_token', None)
+        st.session_state.pop('token_expiry', None)
+        return None
+
 def get_valid_token():
-    """Check for a valid token, or trigger authorization if needed"""
+    """Check for a valid token, refresh if expired, or trigger authorization if needed"""
     token_expiry = st.session_state.get('token_expiry')
     access_token = st.session_state.get('access_token')
-
-    if not access_token or not token_expiry or token_expiry <= datetime.now():
-        # No valid token, redirect user for authorization
+    
+    if access_token and token_expiry:
+        if token_expiry > datetime.now():
+            return access_token
+        else:
+            # Token expired, refresh it
+            return refresh_access_token()
+    else:
+        # No valid token, prompt for authorization
         auth_url = get_authorization_url()
         st.markdown(f"Please [authorize the app]({auth_url}) to continue.")
         return None
-    else:
-        return access_token
 
 def clio_api_request(endpoint, params=None):
     token = get_valid_token()
@@ -77,12 +113,14 @@ def clio_api_request(endpoint, params=None):
         st.error("Token expired or invalid.")
         # Clear the token to force re-authentication
         st.session_state.pop('access_token', None)
+        st.session_state.pop('refresh_token', None)
         st.session_state.pop('token_expiry', None)
     else:
         st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
     return None
 
-def fetch_all_pages(endpoint):
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_all_pages_cached(endpoint):
     all_data = []
     params = {"limit": 100, "page": 1}
     
@@ -90,7 +128,7 @@ def fetch_all_pages(endpoint):
         data = clio_api_request(endpoint, params)
         if data and 'data' in data:
             all_data.extend(data['data'])
-            st.write(f"Fetched {len(data['data'])} items from {endpoint}, page {params['page']}")
+            logging.info(f"Fetched {len(data['data'])} items from {endpoint}, page {params['page']}")
             
             if data.get('meta', {}).get('paging', {}).get('next'):
                 params['page'] += 1
@@ -178,16 +216,15 @@ if authorization_code and 'access_token' not in st.session_state:
     fetch_token(authorization_code)
     st.experimental_rerun()
 
-# Fetch data if not already in session state and authorized
+# Fetch data if not already cached and authorized
 if 'access_token' in st.session_state:
-    if 'contacts' not in st.session_state or 'matters' not in st.session_state:
-        with st.spinner("Fetching data from Clio..."):
-            st.session_state['contacts'] = fetch_all_pages('contacts')
-            st.session_state['matters'] = fetch_all_pages('matters')
-        if st.session_state['contacts'] and st.session_state['matters']:
-            st.success(f"Fetched {len(st.session_state['contacts'])} contacts and {len(st.session_state['matters'])} matters")
-        else:
-            st.error("Failed to fetch data. Please check your Clio API credentials.")
+    with st.spinner("Fetching data from Clio..."):
+        contacts = fetch_all_pages_cached('contacts')
+        matters = fetch_all_pages_cached('matters')
+    if contacts and matters:
+        st.success(f"Fetched {len(contacts)} contacts and {len(matters)} matters")
+    else:
+        st.error("Failed to fetch data. Please check your Clio API credentials.")
 else:
     get_valid_token()  # This will display the authorization link if needed
 
@@ -202,11 +239,11 @@ if st.button("Run Advanced Conflict Check"):
     if new_client_name:
         new_client_info = {
             'name': new_client_name,
-            'dob': new_client_dob.strftime('%Y-%m-%d'),
+            'dob': new_client_dob.strftime('%Y-%m-%d') if new_client_dob else '',
             'address': new_client_address,
             'phone': new_client_phone
         }
-        conflicts = perform_advanced_conflict_check(new_client_info, st.session_state['contacts'], st.session_state['matters'])
+        conflicts = perform_advanced_conflict_check(new_client_info, contacts, matters)
         
         if conflicts:
             st.warning("Potential conflicts detected:")
@@ -219,13 +256,12 @@ if st.button("Run Advanced Conflict Check"):
 
 # Display data statistics
 st.sidebar.title("Data Statistics")
-st.sidebar.write(f"Number of contacts: {len(st.session_state.get('contacts', []))}")
-st.sidebar.write(f"Number of matters: {len(st.session_state.get('matters', []))}")
+st.sidebar.write(f"Number of contacts: {len(contacts) if 'contacts' in locals() else 0}")
+st.sidebar.write(f"Number of matters: {len(matters) if 'matters' in locals() else 0}")
 
 # Optional: Add a refresh data button
 if st.sidebar.button("Refresh Clio Data"):
-    st.session_state.pop('contacts', None)
-    st.session_state.pop('matters', None)
+    fetch_all_pages_cached.clear()  # Clear the cached data
     st.experimental_rerun()
 
 # Display token information in sidebar
@@ -238,7 +274,7 @@ if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
         if st.session_state['token_expiry'] > datetime.now():
             st.sidebar.success("Token is valid")
         else:
-            st.sidebar.warning("Token has expired (will be refreshed on next API call)")
+            st.sidebar.warning("Token has expired (will be refreshed automatically)")
     else:
         st.sidebar.warning("Token expiry is not properly set.")
 else:
