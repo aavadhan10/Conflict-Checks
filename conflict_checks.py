@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import urllib.parse
 import pandas as pd
+import logging
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
