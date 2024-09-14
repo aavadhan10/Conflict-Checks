@@ -15,7 +15,7 @@ TOKEN_URL = "https://app.clio.com/oauth/token"
 # Retrieve credentials from secrets
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
-REDIRECT_URI = st.secrets["REDIRECT_URI"]
+REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Should match your app's URL
 
 def get_authorization_url():
     """Generate the authorization URL to get user consent"""
@@ -58,17 +58,15 @@ def get_valid_token():
 
     if not access_token or not token_expiry or token_expiry <= datetime.now():
         # No valid token, redirect user for authorization
-        st.write("Redirecting to Clio for authorization...")
         auth_url = get_authorization_url()
-        st.write(f"[Authorize Clio]({auth_url})")
+        st.markdown(f"Please [authorize the app]({auth_url}) to continue.")
+        return None
     else:
-        st.write("Using cached access token.")
         return access_token
 
 def clio_api_request(endpoint, params=None):
     token = get_valid_token()
     if not token:
-        st.error("Unable to obtain a valid token.")
         return None
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -77,6 +75,9 @@ def clio_api_request(endpoint, params=None):
         return response.json()
     elif response.status_code == 401:
         st.error("Token expired or invalid.")
+        # Clear the token to force re-authentication
+        st.session_state.pop('access_token', None)
+        st.session_state.pop('token_expiry', None)
     else:
         st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
     return None
@@ -169,10 +170,12 @@ def perform_advanced_conflict_check(new_client_info, contacts, matters):
 # Streamlit app
 st.title("Advanced Clio Conflict Check Tool")
 
-# Input authorization code after redirect
-auth_code = st.text_input("Enter the authorization code from Clio:")
-if auth_code:
-    fetch_token(auth_code)
+# Capture the authorization code from URL parameters
+query_params = st.experimental_get_query_params()
+authorization_code = query_params.get('code', [None])[0]
+
+if authorization_code and 'access_token' not in st.session_state:
+    fetch_token(authorization_code)
     st.experimental_rerun()
 
 # Fetch data if not already in session state and authorized
@@ -186,7 +189,7 @@ if 'access_token' in st.session_state:
         else:
             st.error("Failed to fetch data. Please check your Clio API credentials.")
 else:
-    st.warning("Please authorize the app first to fetch Clio data.")
+    get_valid_token()  # This will display the authorization link if needed
 
 # Input for new client details
 st.header("New Client Details")
@@ -229,4 +232,14 @@ if st.sidebar.button("Refresh Clio Data"):
 if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
     st.sidebar.title("Token Information")
     st.sidebar.write(f"Token expires at: {st.session_state['token_expiry']}")
-
+    
+    # Ensure 'token_expiry' is initialized properly
+    if st.session_state['token_expiry'] and isinstance(st.session_state['token_expiry'], datetime):
+        if st.session_state['token_expiry'] > datetime.now():
+            st.sidebar.success("Token is valid")
+        else:
+            st.sidebar.warning("Token has expired (will be refreshed on next API call)")
+    else:
+        st.sidebar.warning("Token expiry is not properly set.")
+else:
+    st.sidebar.warning("No access token available.")
