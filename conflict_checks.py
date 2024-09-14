@@ -1,0 +1,69 @@
+import streamlit as st
+import pandas as pd
+import requests
+
+# Clio API details
+CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
+CLIENT_ID = st.secrets["83PaxXzo6vtiBslj66UfRgK501k3NZmbO9OHbSVP"]  # Client ID from Clio
+CLIENT_SECRET = st.secrets["HxZ6kwb4tyiDpNDuK8cK1jbJU5iCv6sMj1ymdkqN"]  # Client Secret from Clio
+REDIRECT_URI = st.secrets["http://127.0.0.1:8501/redirect"]  # Redirect URI that matches the one in Clio
+AUTH_URL = "https://app.clio.com/oauth/authorize"
+TOKEN_URL = "https://app.clio.com/oauth/token"
+
+# Function to get authorization URL
+def get_authorization_url():
+    auth_params = {
+        'client_id': CLIENT_ID,
+        'redirect_uri': REDIRECT_URI,
+        'response_type': 'code',
+        'scope': 'contacts.read matters.read',  # Adjust scopes if needed
+    }
+    url = f"{AUTH_URL}?client_id={auth_params['client_id']}&redirect_uri={auth_params['redirect_uri']}&response_type={auth_params['response_type']}&scope={auth_params['scope']}"
+    return url
+
+# Function to exchange authorization code for access token
+def get_access_token(auth_code):
+    data = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'grant_type': 'authorization_code',
+        'code': auth_code,
+        'redirect_uri': REDIRECT_URI
+    }
+    response = requests.post(TOKEN_URL, data=data)
+    if response.status_code == 200:
+        return response.json().get('access_token')
+    else:
+        st.error(f"Error fetching access token: {response.status_code}, {response.text}")
+        return None
+
+# Function to make a request to the Clio API
+def clio_api_request(endpoint, access_token):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        st.error(f"Failed to fetch data from Clio: {response.status_code}")
+        return None
+
+# Streamlit App Layout
+st.title("Clio Conflict Check Tool")
+
+# Step 1: Display the Authorization URL
+auth_url = get_authorization_url()
+st.markdown(f"[Click here to authorize the app with Clio]({auth_url})")
+
+# Step 2: Input the authorization code (this will be copied from the redirect URL)
+auth_code = st.text_input("Enter the authorization code from Clio:")
+
+if auth_code:
+    # Step 3: Get access token using the authorization code
+    access_token = get_access_token(auth_code)
+
+    if access_token:
+        # Step 4: Use the access token to fetch client data or matters
+        st.success("Access token retrieved successfully!")
+        clients_data = clio_api_request('contacts', access_token)
+        if clients_data:
+            st.write("Clients Data:", clients_data)
