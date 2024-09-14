@@ -209,7 +209,14 @@ if st.sidebar.button("Refresh Clio Data"):
 if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
     st.sidebar.title("Token Information")
     st.sidebar.write(f"Token expires at: {st.session_state['token_expiry']}")
-    if st.session_state['token_expiry'] > datetime.now():
-        st.sidebar.success("Token is valid")
+    
+    # Ensure 'token_expiry' is initialized properly
+    if st.session_state['token_expiry'] and isinstance(st.session_state['token_expiry'], datetime):
+        if st.session_state['token_expiry'] > datetime.now():
+            st.sidebar.success("Token is valid")
+        else:
+            st.sidebar.warning("Token has expired (will be refreshed on next API call)")
     else:
-        st.sidebar.warning("Token has expired (will be refreshed on next API call)")
+        st.sidebar.warning("Token expiry is not properly set.")
+else:
+    st.sidebar.warning("No access token available.")
