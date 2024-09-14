@@ -4,7 +4,6 @@ import logging
 from urllib.parse import urlencode
 from datetime import datetime, timedelta
 import json
-import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -19,49 +18,44 @@ CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
 REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Should match your app's URL
 
-# For saving data on your desktop (Works for Mac/Linux/Windows)
-DESKTOP_PATH = os.path.join(os.path.expanduser("~"), "Desktop")
-DATA_FILE = os.path.join(DESKTOP_PATH, "clio_data.json")
-TOKEN_FILE = os.path.join(DESKTOP_PATH, "clio_tokens.json")  # File to store tokens
+# Function to save tokens in session_state
+def save_tokens_to_session(access_token, refresh_token, token_expiry):
+    st.session_state['access_token'] = access_token
+    st.session_state['refresh_token'] = refresh_token
+    st.session_state['token_expiry'] = token_expiry.strftime('%Y-%m-%d %H:%M:%S')
 
-# Function to save tokens in a file
-def save_tokens(access_token, refresh_token, token_expiry):
-    tokens = {
-        'access_token': access_token,
-        'refresh_token': refresh_token,
-        'token_expiry': token_expiry.strftime('%Y-%m-%d %H:%M:%S')
-    }
-    with open(TOKEN_FILE, 'w') as token_file:
-        json.dump(tokens, token_file)
+    # Log before making API calls
+    st.info(f"Tokens saved: Access Token: {access_token}, Refresh Token: {refresh_token}")
 
-# Function to load tokens from the file
-def load_tokens():
-    try:
-        with open(TOKEN_FILE, 'r') as token_file:
-            tokens = json.load(token_file)
-            # Convert expiry time back to a datetime object
-            tokens['token_expiry'] = datetime.strptime(tokens['token_expiry'], '%Y-%m-%d %H:%M:%S')
-            return tokens
-    except FileNotFoundError:
-        return None
+# Function to load tokens from session_state
+def load_tokens_from_session():
+    if 'access_token' in st.session_state and 'refresh_token' in st.session_state:
+        token_expiry = datetime.strptime(st.session_state['token_expiry'], '%Y-%m-%d %H:%M:%S')
+        return {
+            'access_token': st.session_state['access_token'],
+            'refresh_token': st.session_state['refresh_token'],
+            'token_expiry': token_expiry
+        }
+    return None
 
-# Save contacts and matters data to a file on the desktop
-def save_data(contacts, matters):
-    data = {
-        'contacts': contacts,
-        'matters': matters,
-        'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    }
-    with open(DATA_FILE, 'w') as data_file:
-        json.dump(data, data_file)
+# Save contacts and matters data in session_state
+def save_data_to_session(contacts, matters):
+    st.session_state['contacts'] = contacts
+    st.session_state['matters'] = matters
+    st.session_state['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-# Load contacts and matters data from the desktop
-def load_data():
-    try:
-        with open(DATA_FILE, 'r') as data_file:
-            return json.load(data_file)
-    except FileNotFoundError:
-        return None
+    # Log after making API calls
+    st.info(f"Data saved after API call: {len(contacts['data'])} contacts and {len(matters['data'])} matters")
+
+# Load contacts and matters data from session_state
+def load_data_from_session():
+    if 'contacts' in st.session_state and 'matters' in st.session_state:
+        return {
+            'contacts': st.session_state['contacts'],
+            'matters': st.session_state['matters'],
+            'last_updated': st.session_state['last_updated']
+        }
+    return None
 
 def get_authorization_url():
     """Generate the authorization URL to get user consent"""
@@ -90,9 +84,11 @@ def fetch_token(authorization_code):
     
     if response.status_code == 200:
         token_data = response.json()
-        # Save tokens to file
-        save_tokens(token_data['access_token'], token_data['refresh_token'], 
-                    datetime.now() + timedelta(seconds=token_data['expires_in']))
+        
+        # Save tokens before making API calls
+        save_tokens_to_session(token_data['access_token'], token_data['refresh_token'], 
+                               datetime.now() + timedelta(seconds=token_data['expires_in']))
+        
         return token_data['access_token']
     else:
         st.error(f"Failed to fetch token: {response.status_code}, {response.text}")
@@ -100,7 +96,7 @@ def fetch_token(authorization_code):
 
 def refresh_access_token():
     """Refresh the access token using the refresh token"""
-    tokens = load_tokens()
+    tokens = load_tokens_from_session()
     if not tokens or not tokens.get('refresh_token'):
         st.error("No refresh token available. Please reauthorize.")
         return None
@@ -116,9 +112,11 @@ def refresh_access_token():
     
     if response.status_code == 200:
         token_data = response.json()
-        # Update tokens in the file
-        save_tokens(token_data['access_token'], token_data.get('refresh_token', tokens['refresh_token']), 
-                    datetime.now() + timedelta(seconds=token_data['expires_in']))
+
+        # Save tokens before making API calls
+        save_tokens_to_session(token_data['access_token'], token_data.get('refresh_token', tokens['refresh_token']), 
+                               datetime.now() + timedelta(seconds=token_data['expires_in']))
+        
         return token_data['access_token']
     else:
         st.error(f"Failed to refresh token: {response.status_code}, {response.text}")
@@ -126,7 +124,7 @@ def refresh_access_token():
 
 def get_valid_token():
     """Check for a valid token, refresh if expired, or trigger authorization if needed"""
-    tokens = load_tokens()
+    tokens = load_tokens_from_session()
     if tokens:
         access_token = tokens['access_token']
         token_expiry = tokens['token_expiry']
@@ -153,7 +151,9 @@ def clio_api_request(endpoint, params=None):
     elif response.status_code == 401:
         st.error("Token expired or invalid.")
         # Clear the token to force re-authentication
-        save_tokens(None, None, None)
+        st.session_state.pop('access_token', None)
+        st.session_state.pop('refresh_token', None)
+        st.session_state.pop('token_expiry', None)
     else:
         st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
     return None
@@ -162,8 +162,11 @@ def clio_api_request(endpoint, params=None):
 def fetch_all_data():
     contacts = clio_api_request('contacts')
     matters = clio_api_request('matters')
+
     if contacts and matters:
-        save_data(contacts, matters)
+        # Save data after API call
+        save_data_to_session(contacts, matters)
+
     return contacts, matters
 
 # Helper function to check for conflicts in Clio data
@@ -206,13 +209,13 @@ query_params = st.experimental_get_query_params()
 authorization_code = query_params.get('code', [None])[0]
 
 # Fetch token if authorization code is provided
-if authorization_code and not load_tokens():
+if authorization_code and not load_tokens_from_session():
     fetch_token(authorization_code)
     st.experimental_rerun()
 
 # Fetch data if a valid token is available
-if load_tokens():
-    cached_data = load_data()
+if load_tokens_from_session():
+    cached_data = load_data_from_session()
     
     if cached_data:
         contacts = cached_data['contacts']
@@ -226,8 +229,6 @@ if load_tokens():
                 st.success(f"Fetched {len(contacts['data'])} contacts and {len(matters['data'])} matters from Clio.")
             else:
                 st.error("Failed to fetch data. Please check your Clio API credentials.")
-else:
-    get_valid_token()  # This will display the authorization link if needed
 
 # Input for new client details for conflict check
 st.header("New Client Details")
@@ -258,3 +259,4 @@ if st.button("Run Conflict Check"):
 # Sidebar to manually refresh data
 if st.sidebar.button("Refresh Clio Data"):
     fetch_all_data()  # Fetch and re-cache data
+    st.experimental_rerun()
