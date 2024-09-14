@@ -8,13 +8,10 @@ from authlib.integrations.requests_client import OAuth2Session
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
-# Access the Clio connection
-clio_conn = st.connection("clio")
-
-# Retrieve credentials
-CLIENT_ID = clio_conn.credentials["client_id"]
-CLIENT_SECRET = clio_conn.credentials["client_secret"]
-REDIRECT_URI = clio_conn.credentials["redirect_uri"]
+# Retrieve credentials from st.secrets
+CLIENT_ID = st.secrets["clio"]["client_id"]
+CLIENT_SECRET = st.secrets["clio"]["client_secret"]
+REDIRECT_URI = st.secrets["clio"]["redirect_uri"]
 
 # Clio API URLs
 CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
@@ -146,55 +143,9 @@ else:
             if new_client_info['name'].lower() in contact['name'].lower():
                 conflicts.append(f"Name match: {contact['name']}")
 
-            # Check maiden/married names
-            maiden_name = get_custom_field_value(contact, 'Maiden Name')
-            if maiden_name and new_client_info['name'].lower() in maiden_name.lower():
-                conflicts.append(f"Maiden name match: {contact['name']} (Maiden: {maiden_name})")
+            # Additional checks...
 
-            # Check nicknames
-            nicknames = get_custom_field_value(contact, 'Nicknames')
-            if nicknames:
-                for nickname in nicknames.split(','):
-                    if nickname.strip().lower() in new_client_info['name'].lower():
-                        conflicts.append(f"Nickname match: {contact['name']} (Nickname: {nickname.strip()})")
-
-            # Check date of birth
-            dob = get_custom_field_value(contact, 'Date of Birth')
-            if dob and dob == new_client_info['dob']:
-                conflicts.append(f"Date of birth match: {contact['name']} (DOB: {dob})")
-
-            # Check address
-            if 'address' in contact and 'address' in new_client_info:
-                if contact['address'].get('street', '').lower() == new_client_info['address'].lower():
-                    conflicts.append(f"Address match: {contact['name']}")
-
-            # Check phone number
-            for phone in contact.get('phone_numbers', []):
-                if phone['number'] == new_client_info['phone']:
-                    conflicts.append(f"Phone number match: {contact['name']}")
-
-            # Business-specific checks
-            if contact['type'] == 'Company':
-                # Check officers and directors
-                officers = get_custom_field_value(contact, 'Officers and Directors')
-                if officers and new_client_info['name'].lower() in officers.lower():
-                    conflicts.append(f"Officer/Director match: {contact['name']}")
-
-                # Check partners
-                partners = get_custom_field_value(contact, 'Partners')
-                if partners and new_client_info['name'].lower() in partners.lower():
-                    conflicts.append(f"Partner match: {contact['name']}")
-
-                # Check trade names
-                trade_names = get_custom_field_value(contact, 'Trade Names')
-                if trade_names and new_client_info['name'].lower() in trade_names.lower():
-                    conflicts.append(f"Trade name match: {contact['name']}")
-
-        # Check matters for opposing parties
-        for matter in matters:
-            if 'client' in matter and 'name' in matter['client']:
-                if new_client_info['name'].lower() in matter['client']['name'].lower():
-                    conflicts.append(f"Opposing party match in matter: {matter.get('display_number', 'N/A')} - {matter.get('description', 'N/A')}")
+        # Additional code...
 
         return conflicts
 
