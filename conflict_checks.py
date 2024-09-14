@@ -37,6 +37,11 @@ def fetch_token(authorization_code):
         "redirect_uri": REDIRECT_URI
     }
     response = requests.post(TOKEN_URL, data=data)
+    
+    # Log the API response for debugging
+    logging.info(f"Response status code: {response.status_code}")
+    logging.info(f"Response text: {response.text}")
+    
     if response.status_code == 200:
         token_data = response.json()
         st.session_state['access_token'] = token_data['access_token']
