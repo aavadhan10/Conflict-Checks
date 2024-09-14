@@ -4,9 +4,9 @@ import requests
 
 # Clio API details (retrieved from Streamlit secrets)
 CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
-CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]  # Client ID from Streamlit secrets
-CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]  # Client Secret from Streamlit secrets
-REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Redirect URI from Streamlit secrets
+CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
+CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
+REDIRECT_URI = "https://conflictchecks.streamlit.app/redirect"  # Updated to match your app's redirect URI
 AUTH_URL = "https://app.clio.com/oauth/authorize"
 TOKEN_URL = "https://app.clio.com/oauth/token"
 
@@ -16,7 +16,7 @@ def get_authorization_url():
         'client_id': CLIENT_ID,
         'redirect_uri': REDIRECT_URI,
         'response_type': 'code',
-        'scope': 'contacts.read matters.read',  # Adjust scopes if needed
+        'scope': 'contacts.read matters.read',
     }
     url = f"{AUTH_URL}?client_id={auth_params['client_id']}&redirect_uri={auth_params['redirect_uri']}&response_type={auth_params['response_type']}&scope={auth_params['scope']}"
     return url
@@ -53,6 +53,12 @@ def clio_api_request(endpoint, access_token):
 # Streamlit App Layout
 st.title("Clio Conflict Check Tool")
 
+# Display configuration for debugging
+st.write("Configuration:")
+st.write(f"API Base URL: {CLIO_API_BASE_URL}")
+st.write(f"Redirect URI: {REDIRECT_URI}")
+st.write(f"Client ID: {CLIENT_ID[:5]}...{CLIENT_ID[-5:]}")  # Show partial Client ID for security
+
 # Step 1: Display the Authorization URL
 auth_url = get_authorization_url()
 st.markdown(f"[Click here to authorize the app with Clio]({auth_url})")
@@ -60,11 +66,9 @@ st.write(f"Generated Authorization URL: {auth_url}")  # Log authorization URL fo
 
 # Step 2: Input the authorization code (this will be copied from the redirect URL)
 auth_code = st.text_input("Enter the authorization code from Clio:")
-
 if auth_code:
     # Step 3: Get access token using the authorization code
     access_token = get_access_token(auth_code)
-
     if access_token:
         # Step 4: Use the access token to fetch client data or matters
         st.success("Access token retrieved successfully!")
