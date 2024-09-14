@@ -30,7 +30,9 @@ def get_access_token(auth_code):
         'code': auth_code,
         'redirect_uri': REDIRECT_URI
     }
+    st.write(f"Access Token Request Data: {data}")  # Log request data for debugging
     response = requests.post(TOKEN_URL, data=data)
+    st.write(f"Access Token Response: {response.status_code}, {response.text}")  # Log response for debugging
     if response.status_code == 200:
         return response.json().get('access_token')
     else:
@@ -41,10 +43,11 @@ def get_access_token(auth_code):
 def clio_api_request(endpoint, access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
     response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers)
+    st.write(f"API Request to {endpoint}: Status {response.status_code}")  # Log API request status
     if response.status_code == 200:
         return response.json()
     else:
-        st.error(f"Failed to fetch data from Clio: {response.status_code}")
+        st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
         return None
 
 # Streamlit App Layout
@@ -53,6 +56,7 @@ st.title("Clio Conflict Check Tool")
 # Step 1: Display the Authorization URL
 auth_url = get_authorization_url()
 st.markdown(f"[Click here to authorize the app with Clio]({auth_url})")
+st.write(f"Generated Authorization URL: {auth_url}")  # Log authorization URL for debugging
 
 # Step 2: Input the authorization code (this will be copied from the redirect URL)
 auth_code = st.text_input("Enter the authorization code from Clio:")
