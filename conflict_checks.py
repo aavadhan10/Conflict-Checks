@@ -66,15 +66,22 @@ if 'code' in query_params:
         access_token = token_data['access_token']
         st.success("Access token retrieved successfully!")
         
-        # Now you can use this access_token to make API calls
-        if st.button("Fetch User Data"):
-            user_data = clio_api_request('users/who_am_i', access_token)
-            if user_data:
-                st.write("User Data:", user_data)
-            else:
-                st.error("Failed to fetch user data.")
+        # Store the access token in session state
+        st.session_state['access_token'] = access_token
+        
+        # Clear the URL parameters
+        st.experimental_set_query_params()
+        st.experimental_rerun()
     else:
         st.error("Failed to retrieve access token.")
+elif 'access_token' in st.session_state:
+    st.success("You are authorized!")
+    if st.button("Fetch User Data"):
+        user_data = clio_api_request('users/who_am_i', st.session_state['access_token'])
+        if user_data:
+            st.write("User Data:", user_data)
+        else:
+            st.error("Failed to fetch user data.")
 else:
     st.write("Follow these steps to authorize and use the Clio Conflict Check Tool:")
     
