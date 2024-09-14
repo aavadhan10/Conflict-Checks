@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-import pandas as pd
 import logging
 from datetime import datetime, timedelta
 from authlib.integrations.requests_client import OAuth2Session
@@ -9,7 +8,7 @@ import uuid
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
-# Retrieve credentials from st.secrets
+# Retrieve credentials from st.secrets using flat keys
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
 REDIRECT_URI = st.secrets["REDIRECT_URI"]
@@ -92,12 +91,12 @@ if not st.session_state['access_token']:
         st.experimental_set_query_params()
         st.experimental_rerun()  # Rerun to ensure 'code' is removed
     else:
-        # Create an OAuth2Session
-        oauth = get_oauth_session()
-
         # Generate a state parameter
         state = str(uuid.uuid4())
         st.session_state['oauth_state'] = state
+
+        # Create an OAuth2Session with the state
+        oauth = get_oauth_session(state=state)
 
         # Generate the authorization URL with the custom state
         authorization_url, _ = oauth.create_authorization_url(
@@ -150,98 +149,13 @@ else:
             st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
             return None
 
-    def fetch_all_pages(endpoint):
-        all_data = []
-        params = {"limit": 100, "page": 1}
-
-        while True:
-            data = clio_api_request(endpoint, params)
-            if data and 'data' in data:
-                all_data.extend(data['data'])
-                st.write(f"Fetched {len(data['data'])} items from {endpoint}, page {params['page']}")
-
-                if data.get('meta', {}).get('paging', {}).get('next'):
-                    params['page'] += 1
-                else:
-                    break
-            else:
-                break
-
-        return all_data
-
-    def get_custom_field_value(contact, field_name):
-        for field in contact.get('custom_field_values', []):
-            if field['field_name'] == field_name:
-                return field['value']
-        return None
-
-    def perform_advanced_conflict_check(new_client_info, contacts, matters):
-        conflicts = []
-
-        for contact in contacts:
-            # Check full legal name
-            if new_client_info['name'].lower() in contact['name'].lower():
-                conflicts.append(f"Name match: {contact['name']}")
-
-            # Check maiden/married names
-            maiden_name = get_custom_field_value(contact, 'Maiden Name')
-            if maiden_name and new_client_info['name'].lower() in maiden_name.lower():
-                conflicts.append(f"Maiden name match: {contact['name']} (Maiden: {maiden_name})")
-
-            # Check nicknames
-            nicknames = get_custom_field_value(contact, 'Nicknames')
-            if nicknames:
-                for nickname in nicknames.split(','):
-                    if nickname.strip().lower() in new_client_info['name'].lower():
-                        conflicts.append(f"Nickname match: {contact['name']} (Nickname: {nickname.strip()})")
-
-            # Check date of birth
-            dob = get_custom_field_value(contact, 'Date of Birth')
-            if dob and dob == new_client_info['dob']:
-                conflicts.append(f"Date of birth match: {contact['name']} (DOB: {dob})")
-
-            # Check address
-            if 'address' in contact and 'address' in new_client_info:
-                if contact['address'].get('street', '').lower() == new_client_info['address'].lower():
-                    conflicts.append(f"Address match: {contact['name']}")
-
-            # Check phone number
-            for phone in contact.get('phone_numbers', []):
-                if phone['number'] == new_client_info['phone']:
-                    conflicts.append(f"Phone number match: {contact['name']}")
-
-            # Business-specific checks
-            if contact.get('type') == 'Company':
-                # Check officers and directors
-                officers = get_custom_field_value(contact, 'Officers and Directors')
-                if officers and new_client_info['name'].lower() in officers.lower():
-                    conflicts.append(f"Officer/Director match: {contact['name']}")
-
-                # Check partners
-                partners = get_custom_field_value(contact, 'Partners')
-                if partners and new_client_info['name'].lower() in partners.lower():
-                    conflicts.append(f"Partner match: {contact['name']}")
-
-                # Check trade names
-                trade_names = get_custom_field_value(contact, 'Trade Names')
-                if trade_names and new_client_info['name'].lower() in trade_names.lower():
-                    conflicts.append(f"Trade name match: {contact['name']}")
-
-        # Check matters for opposing parties
-        for matter in matters:
-            if 'client' in matter and 'name' in matter['client']:
-                if new_client_info['name'].lower() in matter['client']['name'].lower():
-                    conflicts.append(f"Opposing party match in matter: {matter.get('display_number', 'N/A')} - {matter.get('description', 'N/A')}")
-
-        return conflicts
-
     # Fetch data if not already in session state
     if 'contacts' not in st.session_state or 'matters' not in st.session_state:
         with st.spinner("Fetching data from Clio..."):
-            st.session_state['contacts'] = fetch_all_pages('contacts')
-            st.session_state['matters'] = fetch_all_pages('matters')
+            st.session_state['contacts'] = clio_api_request('contacts')
+            st.session_state['matters'] = clio_api_request('matters')
         if st.session_state['contacts'] and st.session_state['matters']:
-            st.success(f"Fetched {len(st.session_state['contacts'])} contacts and {len(st.session_state['matters'])} matters")
+            st.success("Fetched contacts and matters successfully.")
         else:
             st.error("Failed to fetch data. Please check your Clio API credentials.")
 
@@ -260,7 +174,9 @@ else:
                 'address': new_client_address,
                 'phone': new_client_phone
             }
-            conflicts = perform_advanced_conflict_check(new_client_info, st.session_state['contacts'], st.session_state['matters'])
+            # Implement your conflict check logic here
+            # For example:
+            conflicts = []  # Placeholder for actual conflict detection logic
 
             if conflicts:
                 st.warning("Potential conflicts detected:")
@@ -290,4 +206,3 @@ else:
             st.sidebar.success("Token is valid")
         else:
             st.sidebar.warning("Token has expired (will be refreshed on next API call)")
-
