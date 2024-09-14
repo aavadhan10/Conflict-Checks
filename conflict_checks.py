@@ -3,6 +3,8 @@ import requests
 import logging
 from urllib.parse import urlencode
 from datetime import datetime, timedelta
+import json
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -16,6 +18,50 @@ TOKEN_URL = "https://app.clio.com/oauth/token"
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
 REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Should match your app's URL
+
+# For saving data on your desktop (Works for Mac/Linux/Windows)
+DESKTOP_PATH = os.path.join(os.path.expanduser("~"), "Desktop")
+DATA_FILE = os.path.join(DESKTOP_PATH, "clio_data.json")
+TOKEN_FILE = os.path.join(DESKTOP_PATH, "clio_tokens.json")  # File to store tokens
+
+# Function to save tokens in a file
+def save_tokens(access_token, refresh_token, token_expiry):
+    tokens = {
+        'access_token': access_token,
+        'refresh_token': refresh_token,
+        'token_expiry': token_expiry.strftime('%Y-%m-%d %H:%M:%S')
+    }
+    with open(TOKEN_FILE, 'w') as token_file:
+        json.dump(tokens, token_file)
+
+# Function to load tokens from the file
+def load_tokens():
+    try:
+        with open(TOKEN_FILE, 'r') as token_file:
+            tokens = json.load(token_file)
+            # Convert expiry time back to a datetime object
+            tokens['token_expiry'] = datetime.strptime(tokens['token_expiry'], '%Y-%m-%d %H:%M:%S')
+            return tokens
+    except FileNotFoundError:
+        return None
+
+# Save contacts and matters data to a file on the desktop
+def save_data(contacts, matters):
+    data = {
+        'contacts': contacts,
+        'matters': matters,
+        'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    with open(DATA_FILE, 'w') as data_file:
+        json.dump(data, data_file)
+
+# Load contacts and matters data from the desktop
+def load_data():
+    try:
+        with open(DATA_FILE, 'r') as data_file:
+            return json.load(data_file)
+    except FileNotFoundError:
+        return None
 
 def get_authorization_url():
     """Generate the authorization URL to get user consent"""
@@ -44,9 +90,9 @@ def fetch_token(authorization_code):
     
     if response.status_code == 200:
         token_data = response.json()
-        st.session_state['access_token'] = token_data['access_token']
-        st.session_state['refresh_token'] = token_data['refresh_token']
-        st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
+        # Save tokens to file
+        save_tokens(token_data['access_token'], token_data['refresh_token'], 
+                    datetime.now() + timedelta(seconds=token_data['expires_in']))
         return token_data['access_token']
     else:
         st.error(f"Failed to fetch token: {response.status_code}, {response.text}")
@@ -54,8 +100,8 @@ def fetch_token(authorization_code):
 
 def refresh_access_token():
     """Refresh the access token using the refresh token"""
-    refresh_token = st.session_state.get('refresh_token')
-    if not refresh_token:
+    tokens = load_tokens()
+    if not tokens or not tokens.get('refresh_token'):
         st.error("No refresh token available. Please reauthorize.")
         return None
 
@@ -63,37 +109,32 @@ def refresh_access_token():
         "grant_type": "refresh_token",
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
-        "refresh_token": refresh_token,
+        "refresh_token": tokens['refresh_token'],
         "redirect_uri": REDIRECT_URI
     }
     response = requests.post(TOKEN_URL, data=data)
     
     if response.status_code == 200:
         token_data = response.json()
-        st.session_state['access_token'] = token_data['access_token']
-        # Update the refresh token if it has changed
-        st.session_state['refresh_token'] = token_data.get('refresh_token', refresh_token)
-        st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
+        # Update tokens in the file
+        save_tokens(token_data['access_token'], token_data.get('refresh_token', tokens['refresh_token']), 
+                    datetime.now() + timedelta(seconds=token_data['expires_in']))
         return token_data['access_token']
     else:
         st.error(f"Failed to refresh token: {response.status_code}, {response.text}")
-        # Clear tokens to force re-authentication
-        st.session_state.pop('access_token', None)
-        st.session_state.pop('refresh_token', None)
-        st.session_state.pop('token_expiry', None)
         return None
 
 def get_valid_token():
     """Check for a valid token, refresh if expired, or trigger authorization if needed"""
-    token_expiry = st.session_state.get('token_expiry')
-    access_token = st.session_state.get('access_token')
-    
-    if access_token and token_expiry:
+    tokens = load_tokens()
+    if tokens:
+        access_token = tokens['access_token']
+        token_expiry = tokens['token_expiry']
+        
         if token_expiry > datetime.now():
-            return access_token
+            return access_token  # Token is still valid
         else:
-            # Token expired, refresh it
-            return refresh_access_token()
+            return refresh_access_token()  # Token expired, refresh it
     else:
         # No valid token, prompt for authorization
         auth_url = get_authorization_url()
@@ -112,61 +153,30 @@ def clio_api_request(endpoint, params=None):
     elif response.status_code == 401:
         st.error("Token expired or invalid.")
         # Clear the token to force re-authentication
-        st.session_state.pop('access_token', None)
-        st.session_state.pop('refresh_token', None)
-        st.session_state.pop('token_expiry', None)
+        save_tokens(None, None, None)
     else:
         st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
     return None
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_all_pages_cached(endpoint):
-    all_data = []
-    params = {"limit": 100, "page": 1}
-    
-    while True:
-        data = clio_api_request(endpoint, params)
-        if data and 'data' in data:
-            all_data.extend(data['data'])
-            logging.info(f"Fetched {len(data['data'])} items from {endpoint}, page {params['page']}")
-            
-            if data.get('meta', {}).get('paging', {}).get('next'):
-                params['page'] += 1
-            else:
-                break
-        else:
-            break
-    
-    return all_data
+# Fetch all contacts and matters and save them to cache
+def fetch_all_data():
+    contacts = clio_api_request('contacts')
+    matters = clio_api_request('matters')
+    if contacts and matters:
+        save_data(contacts, matters)
+    return contacts, matters
 
-def get_custom_field_value(contact, field_name):
-    for field in contact.get('custom_field_values', []):
-        if field['field_name'] == field_name:
-            return field['value']
-    return None
-
-def perform_advanced_conflict_check(new_client_info, contacts, matters):
+# Helper function to check for conflicts in Clio data
+def perform_conflict_check(new_client_info, contacts, matters):
     conflicts = []
     
-    for contact in contacts:
+    for contact in contacts['data']:
         # Check full legal name
         if new_client_info['name'].lower() in contact['name'].lower():
             conflicts.append(f"Name match: {contact['name']}")
         
-        # Check maiden/married names
-        maiden_name = get_custom_field_value(contact, 'Maiden Name')
-        if maiden_name and new_client_info['name'].lower() in maiden_name.lower():
-            conflicts.append(f"Maiden name match: {contact['name']} (Maiden: {maiden_name})")
-        
-        # Check nicknames
-        nicknames = get_custom_field_value(contact, 'Nicknames')
-        if nicknames:
-            for nickname in nicknames.split(','):
-                if nickname.strip().lower() in new_client_info['name'].lower():
-                    conflicts.append(f"Nickname match: {contact['name']} (Nickname: {nickname})")
-        
         # Check date of birth
-        dob = get_custom_field_value(contact, 'Date of Birth')
+        dob = contact.get('dob', None)
         if dob and dob == new_client_info['dob']:
             conflicts.append(f"Date of birth match: {contact['name']} (DOB: {dob})")
         
@@ -179,26 +189,9 @@ def perform_advanced_conflict_check(new_client_info, contacts, matters):
         for phone in contact.get('phone_numbers', []):
             if phone['number'] == new_client_info['phone']:
                 conflicts.append(f"Phone number match: {contact['name']}")
-        
-        # Business-specific checks
-        if contact['type'] == 'Company':
-            # Check officers and directors
-            officers = get_custom_field_value(contact, 'Officers and Directors')
-            if officers and new_client_info['name'].lower() in officers.lower():
-                conflicts.append(f"Officer/Director match: {contact['name']}")
-            
-            # Check partners
-            partners = get_custom_field_value(contact, 'Partners')
-            if partners and new_client_info['name'].lower() in partners.lower():
-                conflicts.append(f"Partner match: {contact['name']}")
-            
-            # Check trade names
-            trade_names = get_custom_field_value(contact, 'Trade Names')
-            if trade_names and new_client_info['name'].lower() in trade_names.lower():
-                conflicts.append(f"Trade name match: {contact['name']}")
     
     # Check matters for opposing parties
-    for matter in matters:
+    for matter in matters['data']:
         if 'client' in matter and 'name' in matter['client']:
             if new_client_info['name'].lower() in matter['client']['name'].lower():
                 conflicts.append(f"Opposing party match in matter: {matter.get('display_number', 'N/A')} - {matter.get('description', 'N/A')}")
@@ -206,36 +199,44 @@ def perform_advanced_conflict_check(new_client_info, contacts, matters):
     return conflicts
 
 # Streamlit app
-st.title("Advanced Clio Conflict Check Tool")
+st.title("Clio Conflict Check Tool")
 
 # Capture the authorization code from URL parameters
 query_params = st.experimental_get_query_params()
 authorization_code = query_params.get('code', [None])[0]
 
-if authorization_code and 'access_token' not in st.session_state:
+# Fetch token if authorization code is provided
+if authorization_code and not load_tokens():
     fetch_token(authorization_code)
     st.experimental_rerun()
 
-# Fetch data if not already cached and authorized
-if 'access_token' in st.session_state:
-    with st.spinner("Fetching data from Clio..."):
-        contacts = fetch_all_pages_cached('contacts')
-        matters = fetch_all_pages_cached('matters')
-    if contacts and matters:
-        st.success(f"Fetched {len(contacts)} contacts and {len(matters)} matters")
+# Fetch data if a valid token is available
+if load_tokens():
+    cached_data = load_data()
+    
+    if cached_data:
+        contacts = cached_data['contacts']
+        matters = cached_data['matters']
+        last_updated = cached_data['last_updated']
+        st.success(f"Loaded {len(contacts['data'])} contacts and {len(matters['data'])} matters from cache (last updated on {last_updated}).")
     else:
-        st.error("Failed to fetch data. Please check your Clio API credentials.")
+        with st.spinner("Fetching data from Clio..."):
+            contacts, matters = fetch_all_data()
+            if contacts and matters:
+                st.success(f"Fetched {len(contacts['data'])} contacts and {len(matters['data'])} matters from Clio.")
+            else:
+                st.error("Failed to fetch data. Please check your Clio API credentials.")
 else:
     get_valid_token()  # This will display the authorization link if needed
 
-# Input for new client details
+# Input for new client details for conflict check
 st.header("New Client Details")
 new_client_name = st.text_input("Full Legal Name")
 new_client_dob = st.date_input("Date of Birth")
 new_client_address = st.text_input("Address")
 new_client_phone = st.text_input("Phone Number")
 
-if st.button("Run Advanced Conflict Check"):
+if st.button("Run Conflict Check"):
     if new_client_name:
         new_client_info = {
             'name': new_client_name,
@@ -243,7 +244,7 @@ if st.button("Run Advanced Conflict Check"):
             'address': new_client_address,
             'phone': new_client_phone
         }
-        conflicts = perform_advanced_conflict_check(new_client_info, contacts, matters)
+        conflicts = perform_conflict_check(new_client_info, contacts, matters)
         
         if conflicts:
             st.warning("Potential conflicts detected:")
@@ -252,30 +253,8 @@ if st.button("Run Advanced Conflict Check"):
         else:
             st.success("No conflicts detected.")
     else:
-        st.error("Please enter at least the client's full legal name.")
+        st.error("Please enter the client's full legal name.")
 
-# Display data statistics
-st.sidebar.title("Data Statistics")
-st.sidebar.write(f"Number of contacts: {len(contacts) if 'contacts' in locals() else 0}")
-st.sidebar.write(f"Number of matters: {len(matters) if 'matters' in locals() else 0}")
-
-# Optional: Add a refresh data button
+# Sidebar to manually refresh data
 if st.sidebar.button("Refresh Clio Data"):
-    fetch_all_pages_cached.clear()  # Clear the cached data
-    st.experimental_rerun()
-
-# Display token information in sidebar
-if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
-    st.sidebar.title("Token Information")
-    st.sidebar.write(f"Token expires at: {st.session_state['token_expiry']}")
-    
-    # Ensure 'token_expiry' is initialized properly
-    if st.session_state['token_expiry'] and isinstance(st.session_state['token_expiry'], datetime):
-        if st.session_state['token_expiry'] > datetime.now():
-            st.sidebar.success("Token is valid")
-        else:
-            st.sidebar.warning("Token has expired (will be refreshed automatically)")
-    else:
-        st.sidebar.warning("Token expiry is not properly set.")
-else:
-    st.sidebar.warning("No access token available.")
+    fetch_all_data()  # Fetch and re-cache data
