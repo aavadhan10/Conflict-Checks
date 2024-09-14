@@ -7,20 +7,63 @@ import logging
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
-# Clio API URL
+# Clio API URLs
 CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
+AUTH_URL = "https://app.clio.com/oauth/authorize"
+TOKEN_URL = "https://app.clio.com/oauth/token"
 
-# Retrieve the access token from secrets
-ACCESS_TOKEN = st.secrets["CLIO_ACCESS_TOKEN"]
+# Retrieve credentials from secrets
+CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
+CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
+REDIRECT_URI = st.secrets["REDIRECT_URI"]
+
+def get_new_token():
+    """Function to get a new access token using client credentials flow"""
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET
+    }
+    response = requests.post(TOKEN_URL, data=data)
+    if response.status_code == 200:
+        token_data = response.json()
+        st.session_state['access_token'] = token_data['access_token']
+        st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
+        return token_data['access_token']
+    else:
+        st.error(f"Failed to get new token: {response.status_code}, {response.text}")
+        return None
+
+def get_valid_token():
+    """Function to get a valid token, refreshing if necessary"""
+    if 'access_token' not in st.session_state or 'token_expiry' not in st.session_state:
+        return get_new_token()
+    elif st.session_state['token_expiry'] <= datetime.now():
+        return get_new_token()
+    else:
+        return st.session_state['access_token']
 
 def clio_api_request(endpoint, params=None):
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    token = get_valid_token()
+    if not token:
+        st.error("Unable to obtain a valid token.")
+        return None
+    
+    headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers, params=params)
     if response.status_code == 200:
         return response.json()
-    else:
-        st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
-        return None
+    elif response.status_code == 401:
+        # Token might have just expired, try refreshing once
+        token = get_new_token()
+        if token:
+            headers = {"Authorization": f"Bearer {token}"}
+            response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers, params=params)
+            if response.status_code == 200:
+                return response.json()
+    
+    st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
+    return None
 
 def fetch_all_pages(endpoint):
     all_data = []
@@ -115,7 +158,10 @@ if 'contacts' not in st.session_state or 'matters' not in st.session_state:
     with st.spinner("Fetching data from Clio..."):
         st.session_state['contacts'] = fetch_all_pages('contacts')
         st.session_state['matters'] = fetch_all_pages('matters')
-    st.success(f"Fetched {len(st.session_state['contacts'])} contacts and {len(st.session_state['matters'])} matters")
+    if st.session_state['contacts'] and st.session_state['matters']:
+        st.success(f"Fetched {len(st.session_state['contacts'])} contacts and {len(st.session_state['matters'])} matters")
+    else:
+        st.error("Failed to fetch data. Please check your Clio API credentials.")
 
 # Input for new client details
 st.header("New Client Details")
@@ -153,3 +199,12 @@ if st.sidebar.button("Refresh Clio Data"):
     st.session_state.pop('contacts', None)
     st.session_state.pop('matters', None)
     st.experimental_rerun()
+
+# Display token information in sidebar
+if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
+    st.sidebar.title("Token Information")
+    st.sidebar.write(f"Token expires at: {st.session_state['token_expiry']}")
+    if st.session_state['token_expiry'] > datetime.now():
+        st.sidebar.success("Token is valid")
+    else:
+        st.sidebar.warning("Token has expired (will be refreshed on next API call)")
