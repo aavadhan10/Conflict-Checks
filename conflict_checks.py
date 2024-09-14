@@ -7,7 +7,7 @@ CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]  # Client ID from Streamlit secrets
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]  # Client Secret from Streamlit secrets
 REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Redirect URI from Streamlit secrets
-AUTH_URL = "https://app.clio.com/oauth/authorize?response_type=code&client_id=" + CLIENT_ID + "&redirect_uri=" + REDIRECT_URI + "&scope=contacts.read matters.read"
+AUTH_URL = "https://app.clio.com/oauth/authorize"
 TOKEN_URL = "https://app.clio.com/oauth/token"
 
 # Function to get authorization URL
