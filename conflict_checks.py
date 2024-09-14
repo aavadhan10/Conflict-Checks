@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import logging
+from urllib.parse import urlencode
 from datetime import datetime, timedelta
 
 # Set up logging
@@ -16,12 +17,24 @@ CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
 REDIRECT_URI = st.secrets["REDIRECT_URI"]
 
-def get_new_token():
-    """Function to get a new access token using client credentials flow"""
-    data = {
-        "grant_type": "client_credentials",
+def get_authorization_url():
+    """Generate the authorization URL to get user consent"""
+    params = {
+        "response_type": "code",
         "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET
+        "redirect_uri": REDIRECT_URI,
+        "scope": "contacts.read matters.read offline_access"
+    }
+    return f"{AUTH_URL}?{urlencode(params)}"
+
+def fetch_token(authorization_code):
+    """Exchange authorization code for access token"""
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "code": authorization_code,
+        "redirect_uri": REDIRECT_URI
     }
     response = requests.post(TOKEN_URL, data=data)
     if response.status_code == 200:
@@ -30,22 +43,21 @@ def get_new_token():
         st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
         return token_data['access_token']
     else:
-        st.error(f"Failed to get new token: {response.status_code}, {response.text}")
+        st.error(f"Failed to fetch token: {response.status_code}, {response.text}")
         return None
-        
+
 def get_valid_token():
-    """Function to get a valid token, refreshing if necessary"""
+    """Check for a valid token, or trigger authorization if needed"""
     token_expiry = st.session_state.get('token_expiry')
     access_token = st.session_state.get('access_token')
 
-    if not access_token or not token_expiry:
-        st.info("No valid token or token expiry found. Fetching a new token.")
-        return get_new_token()
-    elif token_expiry <= datetime.now():
-        st.info("Token has expired. Fetching a new token.")
-        return get_new_token()
+    if not access_token or not token_expiry or token_expiry <= datetime.now():
+        # No valid token, redirect user for authorization
+        st.write("Redirecting to Clio for authorization...")
+        auth_url = get_authorization_url()
+        st.write(f"[Authorize Clio]({auth_url})")
     else:
-        st.info("Using cached access token.")
+        st.write("Using cached access token.")
         return access_token
 
 def clio_api_request(endpoint, params=None):
@@ -59,15 +71,9 @@ def clio_api_request(endpoint, params=None):
     if response.status_code == 200:
         return response.json()
     elif response.status_code == 401:
-        # Token might have just expired, try refreshing once
-        token = get_new_token()
-        if token:
-            headers = {"Authorization": f"Bearer {token}"}
-            response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers, params=params)
-            if response.status_code == 200:
-                return response.json()
-    
-    st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
+        st.error("Token expired or invalid.")
+    else:
+        st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
     return None
 
 def fetch_all_pages(endpoint):
@@ -158,15 +164,24 @@ def perform_advanced_conflict_check(new_client_info, contacts, matters):
 # Streamlit app
 st.title("Advanced Clio Conflict Check Tool")
 
-# Fetch data if not already in session state
-if 'contacts' not in st.session_state or 'matters' not in st.session_state:
-    with st.spinner("Fetching data from Clio..."):
-        st.session_state['contacts'] = fetch_all_pages('contacts')
-        st.session_state['matters'] = fetch_all_pages('matters')
-    if st.session_state['contacts'] and st.session_state['matters']:
-        st.success(f"Fetched {len(st.session_state['contacts'])} contacts and {len(st.session_state['matters'])} matters")
-    else:
-        st.error("Failed to fetch data. Please check your Clio API credentials.")
+# Input authorization code after redirect
+auth_code = st.text_input("Enter the authorization code from Clio:")
+if auth_code:
+    fetch_token(auth_code)
+    st.experimental_rerun()
+
+# Fetch data if not already in session state and authorized
+if 'access_token' in st.session_state:
+    if 'contacts' not in st.session_state or 'matters' not in st.session_state:
+        with st.spinner("Fetching data from Clio..."):
+            st.session_state['contacts'] = fetch_all_pages('contacts')
+            st.session_state['matters'] = fetch_all_pages('matters')
+        if st.session_state['contacts'] and st.session_state['matters']:
+            st.success(f"Fetched {len(st.session_state['contacts'])} contacts and {len(st.session_state['matters'])} matters")
+        else:
+            st.error("Failed to fetch data. Please check your Clio API credentials.")
+else:
+    st.warning("Please authorize the app first to fetch Clio data.")
 
 # Input for new client details
 st.header("New Client Details")
@@ -211,12 +226,4 @@ if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
     st.sidebar.write(f"Token expires at: {st.session_state['token_expiry']}")
     
     # Ensure 'token_expiry' is initialized properly
-    if st.session_state['token_expiry'] and isinstance(st.session_state['token_expiry'], datetime):
-        if st.session_state['token_expiry'] > datetime.now():
-            st.sidebar.success("Token is valid")
-        else:
-            st.sidebar.warning("Token has expired (will be refreshed on next API call)")
-    else:
-        st.sidebar.warning("Token expiry is not properly set.")
-else:
-    st.sidebar.warning("No access token available.")
+    if st.session_state
