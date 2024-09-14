@@ -1,8 +1,9 @@
 import streamlit as st
 import requests
 import logging
-from urllib.parse import urlencode
 from datetime import datetime, timedelta
+import sqlite3
+import json
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -15,58 +16,130 @@ TOKEN_URL = "https://app.clio.com/oauth/token"
 # Retrieve credentials from secrets
 CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
-REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Should match your app's URL
+REDIRECT_URI = st.secrets["REDIRECT_URI"]
 
-def get_authorization_url():
-    """Generate the authorization URL to get user consent"""
-    params = {
-        "response_type": "code",
-        "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI,
-        "scope": "contacts.read matters.read offline_access"
-    }
-    return f"{AUTH_URL}?{urlencode(params)}"
+# Initialize SQLite database
+DB_NAME = 'clio_app.db'
 
-def fetch_token(authorization_code):
-    """Exchange authorization code for access token"""
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    # Create tokens table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS tokens (
+            id INTEGER PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            token_expiry TEXT NOT NULL
+        )
+    ''')
+    # Create contacts table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS contacts (
+            id TEXT PRIMARY KEY,
+            data TEXT NOT NULL
+        )
+    ''')
+    # Create matters table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS matters (
+            id TEXT PRIMARY KEY,
+            data TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# Initialize the database
+init_db()
+
+def get_token_from_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT access_token, token_expiry FROM tokens ORDER BY id DESC LIMIT 1')
+    row = c.fetchone()
+    conn.close()
+    if row:
+        access_token, token_expiry_str = row
+        token_expiry = datetime.strptime(token_expiry_str, '%Y-%m-%d %H:%M:%S.%f')
+        return access_token, token_expiry
+    return None, None
+
+def save_token_to_db(access_token, token_expiry):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('INSERT INTO tokens (access_token, token_expiry) VALUES (?, ?)', 
+              (access_token, token_expiry))
+    conn.commit()
+    conn.close()
+
+def get_contacts_from_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT data FROM contacts')
+    rows = c.fetchall()
+    conn.close()
+    contacts = [json.loads(row[0]) for row in rows]
+    return contacts
+
+def save_contacts_to_db(contacts):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    for contact in contacts:
+        c.execute('INSERT OR REPLACE INTO contacts (id, data) VALUES (?, ?)', 
+                  (contact['id'], json.dumps(contact)))
+    conn.commit()
+    conn.close()
+
+def get_matters_from_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT data FROM matters')
+    rows = c.fetchall()
+    conn.close()
+    matters = [json.loads(row[0]) for row in rows]
+    return matters
+
+def save_matters_to_db(matters):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    for matter in matters:
+        c.execute('INSERT OR REPLACE INTO matters (id, data) VALUES (?, ?)', 
+                  (matter['id'], json.dumps(matter)))
+    conn.commit()
+    conn.close()
+
+def get_new_token():
+    """Function to get a new access token using client credentials flow"""
     data = {
-        "grant_type": "authorization_code",
+        "grant_type": "client_credentials",
         "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "code": authorization_code,
-        "redirect_uri": REDIRECT_URI
+        "client_secret": CLIENT_SECRET
     }
     response = requests.post(TOKEN_URL, data=data)
-    
-    # Log the API response for debugging
-    logging.info(f"Response status code: {response.status_code}")
-    logging.info(f"Response text: {response.text}")
-    
     if response.status_code == 200:
         token_data = response.json()
-        st.session_state['access_token'] = token_data['access_token']
-        st.session_state['token_expiry'] = datetime.now() + timedelta(seconds=token_data['expires_in'])
-        return token_data['access_token']
+        access_token = token_data['access_token']
+        token_expiry = datetime.now() + timedelta(seconds=token_data['expires_in'])
+        save_token_to_db(access_token, token_expiry)
+        return access_token
     else:
-        st.error(f"Failed to fetch token: {response.status_code}, {response.text}")
+        st.error(f"Failed to get new token: {response.status_code}, {response.text}")
         return None
 
 def get_valid_token():
-    """Check for a valid token, or trigger authorization if needed"""
-    token_expiry = st.session_state.get('token_expiry')
-    access_token = st.session_state.get('access_token')
-
-    if not access_token or not token_expiry or token_expiry <= datetime.now():
-        # No valid token, redirect user for authorization
-        auth_url = get_authorization_url()
-        st.markdown(f"Please [authorize the app]({auth_url}) to continue.")
-        return None
+    """Function to get a valid token, refreshing if necessary"""
+    access_token, token_expiry = get_token_from_db()
+    if not access_token or not token_expiry:
+        return get_new_token()
+    elif token_expiry <= datetime.now():
+        return get_new_token()
     else:
         return access_token
 
 def clio_api_request(endpoint, params=None):
     token = get_valid_token()
     if not token:
+        st.error("Unable to obtain a valid token.")
         return None
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -74,15 +147,18 @@ def clio_api_request(endpoint, params=None):
     if response.status_code == 200:
         return response.json()
     elif response.status_code == 401:
-        st.error("Token expired or invalid.")
-        # Clear the token to force re-authentication
-        st.session_state.pop('access_token', None)
-        st.session_state.pop('token_expiry', None)
-    else:
-        st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
+        # Token might have just expired, try refreshing once
+        token = get_new_token()
+        if token:
+            headers = {"Authorization": f"Bearer {token}"}
+            response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers, params=params)
+            if response.status_code == 200:
+                return response.json()
+    
+    st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
     return None
 
-def fetch_all_pages(endpoint):
+def fetch_all_pages(endpoint, save_to_db_func):
     all_data = []
     params = {"limit": 100, "page": 1}
     
@@ -98,6 +174,9 @@ def fetch_all_pages(endpoint):
                 break
         else:
             break
+    
+    # Save fetched data to the database
+    save_to_db_func(all_data)
     
     return all_data
 
@@ -170,26 +249,28 @@ def perform_advanced_conflict_check(new_client_info, contacts, matters):
 # Streamlit app
 st.title("Advanced Clio Conflict Check Tool")
 
-# Capture the authorization code from URL parameters
-query_params = st.experimental_get_query_params()
-authorization_code = query_params.get('code', [None])[0]
-
-if authorization_code and 'access_token' not in st.session_state:
-    fetch_token(authorization_code)
-    st.experimental_rerun()
-
-# Fetch data if not already in session state and authorized
-if 'access_token' in st.session_state:
-    if 'contacts' not in st.session_state or 'matters' not in st.session_state:
+# Function to load data from the database or fetch from API
+def load_data():
+    contacts = get_contacts_from_db()
+    matters = get_matters_from_db()
+    
+    if not contacts or not matters:
         with st.spinner("Fetching data from Clio..."):
-            st.session_state['contacts'] = fetch_all_pages('contacts')
-            st.session_state['matters'] = fetch_all_pages('matters')
-        if st.session_state['contacts'] and st.session_state['matters']:
-            st.success(f"Fetched {len(st.session_state['contacts'])} contacts and {len(st.session_state['matters'])} matters")
+            if not contacts:
+                contacts = fetch_all_pages('contacts', save_contacts_to_db)
+            if not matters:
+                matters = fetch_all_pages('matters', save_matters_to_db)
+        if contacts and matters:
+            st.success(f"Loaded {len(contacts)} contacts and {len(matters)} matters from the database.")
         else:
             st.error("Failed to fetch data. Please check your Clio API credentials.")
-else:
-    get_valid_token()  # This will display the authorization link if needed
+    else:
+        st.success(f"Loaded {len(contacts)} contacts and {len(matters)} matters from the database.")
+    
+    return contacts, matters
+
+# Load contacts and matters
+contacts, matters = load_data()
 
 # Input for new client details
 st.header("New Client Details")
@@ -206,7 +287,7 @@ if st.button("Run Advanced Conflict Check"):
             'address': new_client_address,
             'phone': new_client_phone
         }
-        conflicts = perform_advanced_conflict_check(new_client_info, st.session_state['contacts'], st.session_state['matters'])
+        conflicts = perform_advanced_conflict_check(new_client_info, contacts, matters)
         
         if conflicts:
             st.warning("Potential conflicts detected:")
@@ -219,27 +300,26 @@ if st.button("Run Advanced Conflict Check"):
 
 # Display data statistics
 st.sidebar.title("Data Statistics")
-st.sidebar.write(f"Number of contacts: {len(st.session_state.get('contacts', []))}")
-st.sidebar.write(f"Number of matters: {len(st.session_state.get('matters', []))}")
+st.sidebar.write(f"Number of contacts: {len(contacts)}")
+st.sidebar.write(f"Number of matters: {len(matters)}")
 
 # Optional: Add a refresh data button
 if st.sidebar.button("Refresh Clio Data"):
-    st.session_state.pop('contacts', None)
-    st.session_state.pop('matters', None)
+    # Clear the database tables
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('DELETE FROM contacts')
+    c.execute('DELETE FROM matters')
+    conn.commit()
+    conn.close()
     st.experimental_rerun()
 
 # Display token information in sidebar
-if 'access_token' in st.session_state and 'token_expiry' in st.session_state:
+access_token, token_expiry = get_token_from_db()
+if access_token and token_expiry:
     st.sidebar.title("Token Information")
-    st.sidebar.write(f"Token expires at: {st.session_state['token_expiry']}")
-    
-    # Ensure 'token_expiry' is initialized properly
-    if st.session_state['token_expiry'] and isinstance(st.session_state['token_expiry'], datetime):
-        if st.session_state['token_expiry'] > datetime.now():
-            st.sidebar.success("Token is valid")
-        else:
-            st.sidebar.warning("Token has expired (will be refreshed on next API call)")
+    st.sidebar.write(f"Token expires at: {token_expiry}")
+    if token_expiry > datetime.now():
+        st.sidebar.success("Token is valid")
     else:
-        st.sidebar.warning("Token expiry is not properly set.")
-else:
-    st.sidebar.warning("No access token available.")
+        st.sidebar.warning("Token has expired (will be refreshed on next API call)")
