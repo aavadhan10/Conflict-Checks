@@ -50,20 +50,21 @@ if st.button("Check for Conflict"):
 
         st.success(f"Conflict found! Scale LLP has previously worked with the client. Matter Number(s): {matter_list}")
 
-        # Drop the unnecessary columns (Attorney, Client, Matter Description)
-        columns_to_drop = ['Attorney Name', 'Client Name', 'Matter Description']
+        # Drop the unnecessary columns (Attorney Name, Practice Area, Matter Number, Description)
+        columns_to_drop = ['Attorney Name', 'Practice Area', 'Matter Number', 'Description']
         results_cleaned = results.drop(columns=[col for col in columns_to_drop if col in results.columns])
 
+        # Keep Client Name and other relevant columns
         st.dataframe(results_cleaned)
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
 
 # Enhanced sidebar
-st.sidebar.title("📊 Scale LLP Matters Overview")
+st.sidebar.title("📊 Data Overview")
 
 # Display number of matters worked with in a "prettier" way
 num_matters = len(data)
-st.sidebar.markdown(f"<h2 style='color: #4CAF50;'>Number of Matters Till Date: {num_matters}</h2>", unsafe_allow_html=True)
+st.sidebar.markdown(f"<h2 style='color: #4CAF50;'>Number of Matters Worked with: {num_matters}</h2>", unsafe_allow_html=True)
 
 # Add a banner or button for data update info
 st.sidebar.markdown(
