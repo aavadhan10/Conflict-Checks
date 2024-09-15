@@ -1,45 +1,49 @@
 import pandas as pd
-import spacy
-from thefuzz import fuzz
 import streamlit as st
-
-# Load spaCy model for named entity recognition and similarity matching
-nlp = spacy.load('en_core_web_md')
+import networkx as nx
+from pyvis.network import Network
+import streamlit.components.v1 as components
+from thefuzz import fuzz
 
 # File path to the CSV from GitHub
 file_path = 'https://raw.githubusercontent.com/aavadhan10/Conflict-Checks/main/combined_contact_and_matters.csv'
 
-@st.cache_data  # Use st.cache_data for caching data
+@st.cache_data
 def load_data():
-    # Load the CSV file from GitHub
+    # Load the CSV file from GitHub, fill NaN with empty strings to avoid errors
     return pd.read_csv(file_path).fillna("")
 
-# Function to use spaCy for name matching
-def nlp_name_matching(full_name, client_name):
-    # Use spaCy NLP to find similarity between full name input and the client name in the data
-    doc1 = nlp(full_name)
-    doc2 = nlp(client_name)
-    return doc1.similarity(doc2)
+# Function to create a relationship graph using NetworkX and Pyvis
+def create_relationship_graph(data):
+    G = nx.Graph()
 
-# Function to perform fuzzy conflict check with NLP enhancements
-def nlp_conflict_check(full_name, email, phone_number, threshold=0.8):
-    matching_records = []
-
+    # Add nodes and edges based on relationships between clients, matters, and attorneys
     for index, row in data.iterrows():
-        client_name = str(row['Client Name'])
+        client = row['Client Name']
+        matter = row['Matter']
+        attorney = row['Attorney']
 
-        # Use spaCy similarity matching instead of simple fuzzy matching
-        name_similarity = nlp_name_matching(full_name, client_name)
+        # Add nodes for client, matter, and attorney
+        G.add_node(client, label="Client")
+        G.add_node(matter, label="Matter")
+        if pd.notna(attorney):
+            G.add_node(attorney, label="Attorney")
 
-        # Add matching records if the similarity score exceeds the threshold
-        if name_similarity >= threshold:
-            matching_records.append(row)
+        # Add edges representing relationships
+        G.add_edge(client, matter)
+        if pd.notna(attorney):
+            G.add_edge(attorney, matter)
 
-    # Convert list of matching rows to DataFrame
-    return pd.DataFrame(matching_records)
+    return G
 
-# Streamlit app for conflict check
-st.title("Scale LLP Conflict Check System")
+# Function to visualize the graph using Pyvis
+def visualize_graph(G):
+    net = Network(height="750px", width="100%", notebook=False)
+    net.from_nx(G)
+    return net
+
+# Streamlit app for conflict check and relationship graph
+st.title("Scale LLP Conflict Check System with Relationship Graph")
 
 # Input fields for client information
 full_name = st.text_input("Enter Client's Full Name")
@@ -49,21 +53,65 @@ phone_number = st.text_input("Enter Client's Phone Number")
 # Load the CSV data
 data = load_data()
 
-# Perform the conflict check if the user has input all fields
-if st.button("Check for Conflict"):
-    results = nlp_conflict_check(full_name, email, phone_number)
+# Function to perform fuzzy conflict check and identify the matter numbers
+def fuzzy_conflict_check(full_name, email, phone_number, threshold=80):
+    matching_records = []
+
+    for index, row in data.iterrows():
+        # Ensure the 'Client Name' field is a string before performing the fuzzy match
+        client_name = str(row['Client Name'])
+
+        # Fuzzy match for the client name
+        name_match = fuzz.partial_ratio(client_name, full_name)
+
+        # Add matching records if the name similarity exceeds the threshold
+        if name_match >= threshold:
+            matching_records.append(row)
+
+    # Convert list of matching rows to DataFrame
+    return pd.DataFrame(matching_records)
+
+# Create two columns for buttons
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    # Check for Conflict button
+    conflict_check_clicked = st.button("Check for Conflict")
+
+with col2:
+    # Create Relationship Graph button (only shown after conflict check)
+    create_graph_clicked = st.button("Create Relationship Graph", disabled=not conflict_check_clicked)
+
+# Perform the conflict check if the user has input all fields and clicks "Check for Conflict"
+if conflict_check_clicked:
+    results = fuzzy_conflict_check(full_name, email, phone_number)
 
     if not results.empty:
-        st.success(f"Conflict found! Scale LLP has previously worked with the client.")
-        
-        # Drop unnecessary columns and show only relevant details
+        # Drop the unnecessary columns (Attorney, Client, Practice Area, Matter Number, Matter Description)
         columns_to_drop = ['Attorney', 'Client', 'Practice Area', 'Matter Number', 'Matter Description']
         results_cleaned = results.drop(columns=[col for col in columns_to_drop if col in results.columns])
+
+        st.success(f"Conflict found! Scale LLP has previously worked with the client.")
         st.dataframe(results_cleaned)
+
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
 
-# Sidebar for data overview
+# Generate the relationship graph when the "Create Relationship Graph" button is clicked
+if create_graph_clicked and not results.empty:
+    # Create a graph for relationships
+    G = create_relationship_graph(data)
+
+    # Visualize the graph using Pyvis
+    net = visualize_graph(G)
+
+    # Show the graph in Streamlit
+    net.save_graph('relationship_graph.html')
+    HtmlFile = open('relationship_graph.html', 'r', encoding='utf-8')
+    source_code = HtmlFile.read()
+    components.html(source_code, height=800)
+
+# Sidebar
 st.sidebar.title("📊 Data Overview")
 
 # Display number of matters worked with
