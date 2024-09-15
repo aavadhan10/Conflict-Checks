@@ -1,12 +1,7 @@
 import pandas as pd
 import streamlit as st
-from thefuzz import fuzz
+from fuzzywuzzy import fuzz
 import re
-import spacy
-from spacy.tokens import Span
-
-# Load spaCy model for NER
-nlp = spacy.load("en_core_web_sm")
 
 # File path to the CSV from GitHub
 file_path = 'https://raw.githubusercontent.com/aavadhan10/Conflict-Checks/main/combined_contact_and_matters.csv'
@@ -31,35 +26,24 @@ def check_matter_conflicts(matching_records, full_name):
     direct_conflicts = []
     positional_conflicts = []
     personal_conflicts = []
-    involved_parties = []
 
     for index, row in matching_records.iterrows():
         matter_description = str(row['Matter Description']).lower()
         client_name = row['Client Name'].lower()
 
         # Direct Conflicts
-        if full_name.lower() in matter_description:
+        if fuzz.partial_ratio(matter_description, full_name.lower()) >= 80:
             direct_conflicts.append(row)
 
-        # Personal Conflicts
-        if any(name in matter_description for name in [full_name.lower()]):
+        # Personal Conflicts (if any specific names of attorneys or clients are mentioned)
+        if fuzz.partial_ratio(matter_description, full_name.lower()) >= 80:
             personal_conflicts.append(row)
         
-        # Example positional conflicts
+        # Example positional conflicts (this may need more sophisticated logic)
         if re.search(r'\b(?:opposing|adverse)\b', matter_description):
             positional_conflicts.append(row)
 
-        # Extract entities from matter description using spaCy
-        doc = nlp(matter_description)
-        for ent in doc.ents:
-            if ent.label_ in ["PERSON", "ORG"]:  # Example: Adjust based on the types of entities you're interested in
-                involved_parties.append({
-                    'Matter Number': row['Matter Number'],
-                    'Entity': ent.text,
-                    'Label': ent.label_
-                })
-
-    return pd.DataFrame(direct_conflicts), pd.DataFrame(positional_conflicts), pd.DataFrame(personal_conflicts), pd.DataFrame(involved_parties)
+    return pd.DataFrame(direct_conflicts), pd.DataFrame(positional_conflicts), pd.DataFrame(personal_conflicts)
 
 # Streamlit app
 st.title("Scale LLP Conflict Check System")
@@ -84,12 +68,12 @@ if conflict_check_clicked:
     results = fuzzy_conflict_check(full_name, email, phone_number)
     
     if not results.empty:
-        # Drop the unnecessary columns
+        # Drop the unnecessary columns (Attorney, Client, Practice Area, Matter Number, Matter Description)
         columns_to_drop = ['Attorney', 'Client', 'Practice Area', 'Matter Number', 'Matter Description']
         results_cleaned = results.drop(columns=[col for col in columns_to_drop if col in results.columns])
         
         # Conflict Analysis
-        direct_conflicts, positional_conflicts, personal_conflicts, involved_parties = check_matter_conflicts(results, full_name)
+        direct_conflicts, positional_conflicts, personal_conflicts = check_matter_conflicts(results, full_name)
 
         # Display conflict results
         st.success(f"Conflict found! Scale LLP has previously worked with the client.")
@@ -106,10 +90,6 @@ if conflict_check_clicked:
         if not personal_conflicts.empty:
             st.subheader("Personal Conflicts")
             st.dataframe(personal_conflicts)
-
-        if not involved_parties.empty:
-            st.subheader("Potential Involved or Opposing Parties")
-            st.dataframe(involved_parties)
         
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
