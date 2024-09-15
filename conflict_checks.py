@@ -72,7 +72,11 @@ def fuzzy_conflict_check(full_name, email, phone_number, threshold=80):
     return pd.DataFrame(matching_records)
 
 # Perform the conflict check if the user has input all fields
-if st.button("Check for Conflict"):
+check_conflict = st.button("Check for Conflict")
+create_graph = False
+
+# Perform the conflict check first
+if check_conflict:
     results = fuzzy_conflict_check(full_name, email, phone_number)
 
     if not results.empty:
@@ -83,20 +87,24 @@ if st.button("Check for Conflict"):
         st.success(f"Conflict found! Scale LLP has previously worked with the client.")
         st.dataframe(results_cleaned)
 
-        # Create a graph for relationships
-        G = create_relationship_graph(data)
-
-        # Visualize the graph using Pyvis
-        net = visualize_graph(G)
-
-        # Show the graph in Streamlit
-        net.save_graph('relationship_graph.html')
-        HtmlFile = open('relationship_graph.html', 'r', encoding='utf-8')
-        source_code = HtmlFile.read()
-        components.html(source_code, height=800)
+        # Provide the user with an option to create the graph
+        create_graph = st.button("Create Relationship Graph")
 
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
+
+# If the user chooses to create the graph, generate and display the graph
+if create_graph:
+    G = create_relationship_graph(data)
+
+    # Visualize the graph using Pyvis
+    net = visualize_graph(G)
+
+    # Show the graph in Streamlit
+    net.save_graph('relationship_graph.html')
+    HtmlFile = open('relationship_graph.html', 'r', encoding='utf-8')
+    source_code = HtmlFile.read()
+    components.html(source_code, height=800)
 
 # Sidebar
 st.sidebar.title("📊 Data Overview")
@@ -111,3 +119,4 @@ st.sidebar.markdown(
     "<strong>Data Updated from Clio API</strong><br>Last Update: <strong>9/14/2024</strong>"
     "</div>", unsafe_allow_html=True
 )
+
