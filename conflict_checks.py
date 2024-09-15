@@ -9,9 +9,9 @@ nlp = spacy.load('en_core_web_md')
 # File path to the CSV from GitHub
 file_path = 'https://raw.githubusercontent.com/aavadhan10/Conflict-Checks/main/combined_contact_and_matters.csv'
 
-@st.cache_data
+@st.cache_data  # Use st.cache_data for caching data
 def load_data():
-    # Load the CSV file from GitHub, fill NaN with empty strings to avoid errors
+    # Load the CSV file from GitHub
     return pd.read_csv(file_path).fillna("")
 
 # Function to use spaCy for name matching
@@ -35,6 +35,7 @@ def nlp_conflict_check(full_name, email, phone_number, threshold=0.8):
         if name_similarity >= threshold:
             matching_records.append(row)
 
+    # Convert list of matching rows to DataFrame
     return pd.DataFrame(matching_records)
 
 # Streamlit app for conflict check
