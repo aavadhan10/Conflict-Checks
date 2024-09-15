@@ -49,7 +49,12 @@ if st.button("Check for Conflict"):
         matter_list = ', '.join(map(str, matter_numbers))
 
         st.success(f"Conflict found! Scale LLP has previously worked with the client. Matter Number(s): {matter_list}")
-        st.dataframe(results)
+
+        # Drop the unnecessary columns (Attorney, Client, Practice Area, Matter Number, Description)
+        columns_to_drop = ['Attorney Name', 'Client Name', 'Practice Area', 'Matter Number', 'Description']
+        results_cleaned = results.drop(columns=[col for col in columns_to_drop if col in results.columns])
+
+        st.dataframe(results_cleaned)
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
 
