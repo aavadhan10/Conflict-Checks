@@ -59,11 +59,11 @@ if st.button("Check for Conflict"):
         st.info("No conflicts found. Scale LLP has not worked with this client.")
 
 # Enhanced sidebar
-st.sidebar.title("📊 Data Overview")
+st.sidebar.title("📊 Scale LLP Matters Overview")
 
 # Display number of matters worked with in a "prettier" way
 num_matters = len(data)
-st.sidebar.markdown(f"<h2 style='color: #4CAF50;'>Number of Matters Worked with: {num_matters}</h2>", unsafe_allow_html=True)
+st.sidebar.markdown(f"<h2 style='color: #4CAF50;'>Number of Matters Till Date: {num_matters}</h2>", unsafe_allow_html=True)
 
 # Add a banner or button for data update info
 st.sidebar.markdown(
