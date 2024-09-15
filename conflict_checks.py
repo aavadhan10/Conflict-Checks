@@ -1,497 +1,55 @@
+import pandas as pd
 import streamlit as st
-import requests
-import logging
-from datetime import datetime, timedelta
-import sqlite3
-import json
-from urllib.parse import urlencode, urlparse, parse_qs
+from thefuzz import fuzz, process
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# GitHub CSV file URL
+github_url = 'https://raw.githubusercontent.com/aavadhan10/Conflict-Checks/main/combined_contact_and_matters.csv'
 
-# Clio API URLs
-CLIO_API_BASE_URL = "https://app.clio.com/api/v4"
-AUTH_URL = "https://app.clio.com/oauth/authorize"
-TOKEN_URL = "https://app.clio.com/oauth/token"
-
-# Retrieve credentials from Streamlit secrets
-CLIENT_ID = st.secrets["CLIO_CLIENT_ID"]
-CLIENT_SECRET = st.secrets["CLIO_CLIENT_SECRET"]
-REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Must match the redirect URI set in Clio
-
-# Initialize SQLite database
-DB_NAME = 'clio_app.db'
-
-def init_db():
-    """
-    Initialize the SQLite database with required tables.
-    Adds missing columns if necessary.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    
-    # Create tokens table if it doesn't exist
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            access_token TEXT NOT NULL,
-            refresh_token TEXT,
-            token_expiry TEXT NOT NULL
-        )
-    ''')
-    
-    # Check if 'refresh_token' column exists
-    c.execute("PRAGMA table_info(tokens)")
-    columns = [info[1] for info in c.fetchall()]
-    
-    if 'refresh_token' not in columns:
-        try:
-            c.execute('ALTER TABLE tokens ADD COLUMN refresh_token TEXT')
-            st.info("Added 'refresh_token' column to 'tokens' table.")
-        except sqlite3.OperationalError as e:
-            st.error(f"Error altering tokens table: {e}")
-    
-    # Ensure contacts table exists
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS contacts (
-            id TEXT PRIMARY KEY,
-            data TEXT NOT NULL
-        )
-    ''')
-    
-    # Ensure matters table exists
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS matters (
-            id TEXT PRIMARY KEY,
-            data TEXT NOT NULL
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-
-def get_token_from_db():
-    """
-    Retrieve the latest access token, refresh token, and expiry from the database.
-    Returns:
-        access_token (str or None)
-        refresh_token (str or None)
-        token_expiry (datetime or None)
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT access_token, refresh_token, token_expiry FROM tokens ORDER BY id DESC LIMIT 1')
-    row = c.fetchone()
-    conn.close()
-    if row:
-        access_token, refresh_token, token_expiry_str = row
-        try:
-            token_expiry = datetime.strptime(token_expiry_str, '%Y-%m-%d %H:%M:%S.%f')
-            return access_token, refresh_token, token_expiry
-        except ValueError:
-            st.error("Invalid token expiry format in database.")
-            return None, None, None
-    return None, None, None
-
-def save_token_to_db(access_token, refresh_token, token_expiry):
-    """
-    Save a new access token and refresh token to the database.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('INSERT INTO tokens (access_token, refresh_token, token_expiry) VALUES (?, ?, ?)', 
-              (access_token, refresh_token, token_expiry.strftime('%Y-%m-%d %H:%M:%S.%f')))
-    conn.commit()
-    conn.close()
-
-def refresh_access_token(refresh_token):
-    """
-    Refresh the access token using the provided refresh token.
-    Returns:
-        new_access_token (str or None)
-    """
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-    }
-    response = requests.post(TOKEN_URL, data=data)
-    if response.status_code == 200:
-        token_data = response.json()
-        access_token = token_data['access_token']
-        new_refresh_token = token_data.get('refresh_token', refresh_token)  # Some APIs may return a new refresh token
-        token_expiry = datetime.now() + timedelta(seconds=token_data['expires_in'])
-        save_token_to_db(access_token, new_refresh_token, token_expiry)
-        st.success("Access token refreshed successfully.")
-        return access_token
-    else:
-        st.error(f"Failed to refresh token: {response.status_code}, {response.text}")
-        return None
-
-def get_valid_token():
-    """
-    Retrieve a valid access token, refreshing it if necessary.
-    Returns:
-        access_token (str or None)
-    """
-    access_token, refresh_token, token_expiry = get_token_from_db()
-    if not access_token or not token_expiry:
-        return None
-    elif token_expiry <= datetime.now():
-        if refresh_token:
-            return refresh_access_token(refresh_token)
-        else:
-            return None
-    else:
-        return access_token
-
-def clio_api_request(endpoint, params=None):
-    """
-    Make an authenticated GET request to the Clio API.
-    Args:
-        endpoint (str): API endpoint (e.g., 'contacts', 'matters').
-        params (dict, optional): Query parameters.
-    Returns:
-        response.json() if successful, else None
-    """
-    token = get_valid_token()
-    if not token:
-        st.warning("No valid access token available. Please authenticate.")
-        return None
-    
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers, params=params)
-    if response.status_code == 200:
-        return response.json()
-    elif response.status_code == 401:
-        # Token might have just expired, try refreshing once
-        refresh_token = get_refresh_token()
-        if refresh_token:
-            new_token = refresh_access_token(refresh_token)
-            if new_token:
-                headers = {"Authorization": f"Bearer {new_token}"}
-                response = requests.get(f"{CLIO_API_BASE_URL}/{endpoint}", headers=headers, params=params)
-                if response.status_code == 200:
-                    return response.json()
-        st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
-    else:
-        st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
-    return None
-
-def fetch_all_pages(endpoint, save_to_db_func):
-    """
-    Fetch all pages of data from a Clio API endpoint.
-    Args:
-        endpoint (str): API endpoint.
-        save_to_db_func (function): Function to save fetched data to the database.
-    Returns:
-        all_data (list): List of all fetched items.
-    """
-    all_data = []
-    params = {"limit": 100, "page": 1}
-    
-    while True:
-        data = clio_api_request(endpoint, params)
-        if data and 'data' in data:
-            all_data.extend(data['data'])
-            st.write(f"Fetched {len(data['data'])} items from {endpoint}, page {params['page']}")
-            
-            if data.get('meta', {}).get('paging', {}).get('next'):
-                params['page'] += 1
-            else:
-                break
-        else:
-            break
-    
-    # Save fetched data to the database
-    save_to_db_func(all_data)
-    
-    return all_data
-
-def get_custom_field_value(contact, field_name):
-    """
-    Retrieve the value of a custom field from a contact.
-    Args:
-        contact (dict): Contact data.
-        field_name (str): Name of the custom field.
-    Returns:
-        value (str or None)
-    """
-    for field in contact.get('custom_field_values', []):
-        if field['field_name'].lower() == field_name.lower():
-            return field['value']
-    return None
-
-def perform_advanced_conflict_check(new_client_info, contacts, matters):
-    """
-    Perform an advanced conflict check against existing contacts and matters.
-    Args:
-        new_client_info (dict): Information about the new client.
-        contacts (list): List of existing contacts.
-        matters (list): List of existing matters.
-    Returns:
-        conflicts (list): List of detected conflicts.
-    """
-    conflicts = []
-    
-    for contact in contacts:
-        # Check full legal name
-        if new_client_info['name'].lower() in contact['name'].lower():
-            conflicts.append(f"Name match: {contact['name']}")
-        
-        # Check maiden/married names
-        maiden_name = get_custom_field_value(contact, 'Maiden Name')
-        if maiden_name and new_client_info['name'].lower() in maiden_name.lower():
-            conflicts.append(f"Maiden name match: {contact['name']} (Maiden: {maiden_name})")
-        
-        # Check nicknames
-        nicknames = get_custom_field_value(contact, 'Nicknames')
-        if nicknames:
-            for nickname in nicknames.split(','):
-                if nickname.strip().lower() in new_client_info['name'].lower():
-                    conflicts.append(f"Nickname match: {contact['name']} (Nickname: {nickname.strip()})")
-        
-        # Check date of birth
-        dob = get_custom_field_value(contact, 'Date of Birth')
-        if dob and dob == new_client_info['dob']:
-            conflicts.append(f"Date of birth match: {contact['name']} (DOB: {dob})")
-        
-        # Check address
-        contact_address = contact.get('address', {}).get('street', '').lower()
-        new_address = new_client_info['address'].lower()
-        if contact_address and new_address and contact_address == new_address:
-            conflicts.append(f"Address match: {contact['name']}")
-        
-        # Check phone number
-        for phone in contact.get('phone_numbers', []):
-            if phone['number'] == new_client_info['phone']:
-                conflicts.append(f"Phone number match: {contact['name']}")
-        
-        # Business-specific checks
-        if contact.get('type', '').lower() == 'company':
-            # Check officers and directors
-            officers = get_custom_field_value(contact, 'Officers and Directors')
-            if officers and new_client_info['name'].lower() in officers.lower():
-                conflicts.append(f"Officer/Director match: {contact['name']}")
-            
-            # Check partners
-            partners = get_custom_field_value(contact, 'Partners')
-            if partners and new_client_info['name'].lower() in partners.lower():
-                conflicts.append(f"Partner match: {contact['name']}")
-            
-            # Check trade names
-            trade_names = get_custom_field_value(contact, 'Trade Names')
-            if trade_names and new_client_info['name'].lower() in trade_names.lower():
-                conflicts.append(f"Trade name match: {contact['name']}")
-    
-    # Check matters for opposing parties
-    for matter in matters:
-        client = matter.get('client', {})
-        client_name = client.get('name', '').lower()
-        if new_client_info['name'].lower() in client_name:
-            conflicts.append(f"Opposing party match in matter: {matter.get('display_number', 'N/A')} - {matter.get('description', 'N/A')}")
-    
-    return conflicts
-
-def get_contacts_from_db():
-    """
-    Retrieve all contacts from the database.
-    Returns:
-        contacts (list): List of contact dictionaries.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT data FROM contacts')
-    rows = c.fetchall()
-    conn.close()
-    contacts = [json.loads(row[0]) for row in rows]
-    return contacts
-
-def save_contacts_to_db(contacts):
-    """
-    Save contacts to the database.
-    Args:
-        contacts (list): List of contact dictionaries.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    for contact in contacts:
-        c.execute('INSERT OR REPLACE INTO contacts (id, data) VALUES (?, ?)', 
-                  (contact['id'], json.dumps(contact)))
-    conn.commit()
-    conn.close()
-
-def get_matters_from_db():
-    """
-    Retrieve all matters from the database.
-    Returns:
-        matters (list): List of matter dictionaries.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT data FROM matters')
-    rows = c.fetchall()
-    conn.close()
-    matters = [json.loads(row[0]) for row in rows]
-    return matters
-
-def save_matters_to_db(matters):
-    """
-    Save matters to the database.
-    Args:
-        matters (list): List of matter dictionaries.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    for matter in matters:
-        c.execute('INSERT OR REPLACE INTO matters (id, data) VALUES (?, ?)', 
-                  (matter['id'], json.dumps(matter)))
-    conn.commit()
-    conn.close()
-
-def get_refresh_token():
-    """
-    Retrieve the latest refresh token from the database.
-    Returns:
-        refresh_token (str or None)
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT refresh_token FROM tokens ORDER BY id DESC LIMIT 1')
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return row[0]
-    return None
-
-def authenticate():
-    """
-    Handles the OAuth 2.0 Authorization Code Grant flow.
-    """
-    # Check if the user is returning from the authorization server
-    query_params = st.experimental_get_query_params()
-    if 'code' in query_params:
-        code = query_params['code'][0]
-        # Exchange the authorization code for an access token
-        data = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": REDIRECT_URI,
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-        }
-        response = requests.post(TOKEN_URL, data=data)
-        if response.status_code == 200:
-            token_data = response.json()
-            access_token = token_data['access_token']
-            refresh_token = token_data.get('refresh_token')
-            token_expiry = datetime.now() + timedelta(seconds=token_data['expires_in'])
-            save_token_to_db(access_token, refresh_token, token_expiry)
-            st.success("Authentication successful!")
-            # Remove the authorization code from the URL to clean up
-            st.experimental_set_query_params()
-        else:
-            st.error(f"Failed to obtain token: {response.status_code}, {response.text}")
-    
-    # Check if a valid token exists
-    access_token, refresh_token, token_expiry = get_token_from_db()
-    if not access_token or not token_expiry or token_expiry <= datetime.now():
-        auth_params = {
-            "response_type": "code",
-            "client_id": CLIENT_ID,
-            "redirect_uri": REDIRECT_URI,
-            "scope": "read",  # Adjust scopes as necessary
-            "state": "streamlit_app",  # Optional: can be used to prevent CSRF
-        }
-        auth_url = f"{AUTH_URL}?{urlencode(auth_params)}"
-        st.markdown(f"### Please [authorize the application]({auth_url}) to continue.")
-        st.stop()
-
+@st.cache
 def load_data():
-    """
-    Load contacts and matters from the database or fetch from Clio API if not present.
-    Returns:
-        contacts (list): List of contact dictionaries.
-        matters (list): List of matter dictionaries.
-    """
-    contacts = get_contacts_from_db()
-    matters = get_matters_from_db()
+    # Load the CSV file from GitHub
+    return pd.read_csv(github_url)
+
+# Streamlit app for conflict check
+st.title("Law Firm Conflict Check System")
+
+# Input fields for client information
+first_name = st.text_input("Enter Client's First Name")
+last_name = st.text_input("Enter Client's Last Name")
+email = st.text_input("Enter Client's Email")
+phone_number = st.text_input("Enter Client's Phone Number")
+
+# Load the CSV data
+data = load_data()
+
+# Function to perform fuzzy conflict check
+def fuzzy_conflict_check(first_name, last_name, email, phone_number, threshold=80):
+    # Results DataFrame to store matching records
+    matching_records = pd.DataFrame()
+
+    # Apply fuzzy matching to first name, last name, email, and phone number
+    for index, row in data.iterrows():
+        name_match = fuzz.partial_ratio(f"{row['First Name']} {row['Last Name']}", f"{first_name} {last_name}")
+        email_match = fuzz.partial_ratio(row['Email'], email)
+        phone_match = fuzz.partial_ratio(row['Phone'], phone_number)
+
+        # If any of these match the threshold, consider it a match
+        if name_match >= threshold or email_match >= threshold or phone_match >= threshold:
+            matching_records = matching_records.append(row)
+
+    return matching_records
+
+# Perform the conflict check if the user has input all fields
+if st.button("Check for Conflict"):
+    results = fuzzy_conflict_check(first_name, last_name, email, phone_number)
     
-    if not contacts or not matters:
-        with st.spinner("Fetching data from Clio..."):
-            if not contacts:
-                contacts = fetch_all_pages('contacts', save_contacts_to_db)
-            if not matters:
-                matters = fetch_all_pages('matters', save_matters_to_db)
-        if contacts and matters:
-            st.success(f"Loaded {len(contacts)} contacts and {len(matters)} matters from Clio and saved to the database.")
-        else:
-            st.error("Failed to fetch data. Please check your Clio API credentials and authentication.")
+    if not results.empty:
+        st.success(f"Conflict found! The firm has previously worked with the client.")
+        st.dataframe(results)
     else:
-        st.success(f"Loaded {len(contacts)} contacts and {len(matters)} matters from the database.")
-    
-    return contacts, matters
+        st.info("No conflicts found. The firm has not worked with this client.")
 
-# Initialize the database
-init_db()
-
-# Authenticate the user
-authenticate()
-
-# Load contacts and matters
-contacts, matters = load_data()
-
-# Input for new client details
-st.header("New Client Details")
-new_client_name = st.text_input("Full Legal Name")
-new_client_dob = st.date_input("Date of Birth")
-new_client_address = st.text_input("Address")
-new_client_phone = st.text_input("Phone Number")
-
-if st.button("Run Advanced Conflict Check"):
-    if new_client_name:
-        new_client_info = {
-            'name': new_client_name,
-            'dob': new_client_dob.strftime('%Y-%m-%d'),
-            'address': new_client_address,
-            'phone': new_client_phone
-        }
-        conflicts = perform_advanced_conflict_check(new_client_info, contacts, matters)
-        
-        if conflicts:
-            st.warning("Potential conflicts detected:")
-            for conflict in conflicts:
-                st.write(conflict)
-        else:
-            st.success("No conflicts detected.")
-    else:
-        st.error("Please enter at least the client's full legal name.")
-
-# Display data statistics
+# Display data statistics in the sidebar
 st.sidebar.title("Data Statistics")
-st.sidebar.write(f"Number of contacts: {len(contacts)}")
-st.sidebar.write(f"Number of matters: {len(matters)}")
+st.sidebar.write(f"Number of contacts: {len(data)}")
 
-# Optional: Add a refresh data button
-if st.sidebar.button("Refresh Clio Data"):
-    with st.spinner("Refreshing data from Clio..."):
-        # Clear the database tables
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute('DELETE FROM contacts')
-        c.execute('DELETE FROM matters')
-        conn.commit()
-        conn.close()
-    st.success("Clio data refreshed successfully.")
-    st.experimental_rerun()
-
-# Display token information in sidebar
-access_token, refresh_token, token_expiry = get_token_from_db()
-if access_token and token_expiry:
-    st.sidebar.title("Token Information")
-    st.sidebar.write(f"Token expires at: {token_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
-    if token_expiry > datetime.now():
-        st.sidebar.success("Token is valid")
-    else:
-        st.sidebar.warning("Token has expired (will be refreshed on next API call)")
