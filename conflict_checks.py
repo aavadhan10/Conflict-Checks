@@ -1,8 +1,5 @@
 import pandas as pd
 import streamlit as st
-import networkx as nx
-from pyvis.network import Network
-import streamlit.components.v1 as components
 from thefuzz import fuzz
 
 # File path to the CSV from GitHub
@@ -13,37 +10,8 @@ def load_data():
     # Load the CSV file from GitHub, fill NaN with empty strings to avoid errors
     return pd.read_csv(file_path).fillna("")
 
-# Function to create a relationship graph using NetworkX and Pyvis
-def create_relationship_graph(data):
-    G = nx.Graph()
-
-    # Add nodes and edges based on relationships between clients, matters, and attorneys
-    for index, row in data.iterrows():
-        client = row['Client Name']
-        matter = row['Matter']
-        attorney = row['Attorney']
-
-        # Add nodes for client, matter, and attorney
-        G.add_node(client, label="Client")
-        G.add_node(matter, label="Matter")
-        if pd.notna(attorney):
-            G.add_node(attorney, label="Attorney")
-
-        # Add edges representing relationships
-        G.add_edge(client, matter)
-        if pd.notna(attorney):
-            G.add_edge(attorney, matter)
-
-    return G
-
-# Function to visualize the graph using Pyvis
-def visualize_graph(G):
-    net = Network(height="750px", width="100%", notebook=False)
-    net.from_nx(G)
-    return net
-
-# Streamlit app for conflict check and relationship graph
-st.title("Scale LLP Conflict Check System with Relationship Graph")
+# Streamlit app for conflict check
+st.title("Scale LLP Conflict Check System")
 
 # Input fields for client information
 full_name = st.text_input("Enter Client's Full Name")
@@ -71,19 +39,8 @@ def fuzzy_conflict_check(full_name, email, phone_number, threshold=80):
     # Convert list of matching rows to DataFrame
     return pd.DataFrame(matching_records)
 
-# Create two columns for buttons
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    # Check for Conflict button
-    conflict_check_clicked = st.button("Check for Conflict")
-
-with col2:
-    # Create Relationship Graph button (only shown after conflict check)
-    create_graph_clicked = st.button("Create Relationship Graph", disabled=not conflict_check_clicked)
-
-# Perform the conflict check if the user has input all fields and clicks "Check for Conflict"
-if conflict_check_clicked:
+# Check for Conflict button
+if st.button("Check for Conflict"):
     results = fuzzy_conflict_check(full_name, email, phone_number)
 
     if not results.empty:
@@ -91,25 +48,11 @@ if conflict_check_clicked:
         columns_to_drop = ['Attorney', 'Client', 'Practice Area', 'Matter Number', 'Matter Description']
         results_cleaned = results.drop(columns=[col for col in columns_to_drop if col in results.columns])
 
-        st.success(f"Conflict found! Scale LLP has previously worked with the client.")
+        st.success("Conflict found! Scale LLP has previously worked with the client.")
         st.dataframe(results_cleaned)
 
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
-
-# Generate the relationship graph when the "Create Relationship Graph" button is clicked
-if create_graph_clicked and not results.empty:
-    # Create a graph for relationships
-    G = create_relationship_graph(data)
-
-    # Visualize the graph using Pyvis
-    net = visualize_graph(G)
-
-    # Show the graph in Streamlit
-    net.save_graph('relationship_graph.html')
-    HtmlFile = open('relationship_graph.html', 'r', encoding='utf-8')
-    source_code = HtmlFile.read()
-    components.html(source_code, height=800)
 
 # Sidebar
 st.sidebar.title("📊 Data Overview")
