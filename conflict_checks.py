@@ -61,8 +61,7 @@ col1, col2 = st.columns([2, 1])
 with col1:
     conflict_check_clicked = st.button("Check for Conflict")
 
-with col2:
-    create_graph_clicked = st.button("Create Relationship Graph", disabled=not conflict_check_clicked)
+
 
 if conflict_check_clicked:
     results = fuzzy_conflict_check(full_name, email, phone_number)
