@@ -124,5 +124,3 @@ st.sidebar.markdown(
     "<strong>Data Updated from Clio API</strong><br>Last Update: <strong>9/14/2024</strong>"
     "</div>", unsafe_allow_html=True
 )
-
-
