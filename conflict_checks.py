@@ -1,6 +1,5 @@
-import pandas as pd
 import streamlit as st
-from fuzzywuzzy import fuzz
+from thefuzz import fuzz
 import re
 
 # File path to the CSV from GitHub
@@ -32,11 +31,11 @@ def check_matter_conflicts(matching_records, full_name):
         client_name = row['Client Name'].lower()
 
         # Direct Conflicts
-        if fuzz.partial_ratio(matter_description, full_name.lower()) >= 80:
+        if full_name.lower() in matter_description:
             direct_conflicts.append(row)
 
         # Personal Conflicts (if any specific names of attorneys or clients are mentioned)
-        if fuzz.partial_ratio(matter_description, full_name.lower()) >= 80:
+        if any(name in matter_description for name in [full_name.lower()]):
             personal_conflicts.append(row)
         
         # Example positional conflicts (this may need more sophisticated logic)
@@ -116,5 +115,4 @@ st.sidebar.markdown(
     "<div style='background-color: #f0f0f5; padding: 10px; border-radius: 5px; border: 1px solid #ccc;'>"
     "<strong>Data Updated from Clio API</strong><br>Last Update: <strong>9/14/2024</strong>"
     "</div>", unsafe_allow_html=True
-)
-
+) 
