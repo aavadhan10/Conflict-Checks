@@ -11,7 +11,7 @@ def load_data():
     return pd.read_csv(github_url).fillna("")
 
 # Streamlit app for conflict check
-st.title("Law Firm Conflict Check System")
+st.title("Scale LLP Conflict Check System")
 
 # Input fields for client information
 full_name = st.text_input("Enter Client's Full Name")
@@ -43,10 +43,10 @@ if st.button("Check for Conflict"):
     results = fuzzy_conflict_check(full_name, email, phone_number)
     
     if not results.empty:
-        st.success(f"Conflict found! The firm has previously worked with the client.")
+        st.success(f"Conflict found! Scale LLP has previously worked with the client.")
         st.dataframe(results)
     else:
-        st.info("No conflicts found. The firm has not worked with this client.")
+        st.info("No conflicts found. Scale LLP has not worked with this client.")
 
 # Display data statistics in the sidebar
 st.sidebar.title("Data Statistics")
