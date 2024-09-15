@@ -82,20 +82,21 @@ if st.button("Check for Conflict"):
 
         st.success(f"Conflict found! Scale LLP has previously worked with the client.")
         st.dataframe(results_cleaned)
+
+        # Create a graph for relationships
+        G = create_relationship_graph(data)
+
+        # Visualize the graph using Pyvis
+        net = visualize_graph(G)
+
+        # Show the graph in Streamlit
+        net.save_graph('relationship_graph.html')
+        HtmlFile = open('relationship_graph.html', 'r', encoding='utf-8')
+        source_code = HtmlFile.read()
+        components.html(source_code, height=800)
+
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
-
-# Create a graph for relationships
-G = create_relationship_graph(data)
-
-# Visualize the graph using Pyvis
-net = visualize_graph(G)
-
-# Show the graph in Streamlit
-net.save_graph('relationship_graph.html')
-HtmlFile = open('relationship_graph.html', 'r', encoding='utf-8')
-source_code = HtmlFile.read()
-components.html(source_code, height=800)
 
 # Sidebar
 st.sidebar.title("📊 Data Overview")
@@ -110,4 +111,3 @@ st.sidebar.markdown(
     "<strong>Data Updated from Clio API</strong><br>Last Update: <strong>9/14/2024</strong>"
     "</div>", unsafe_allow_html=True
 )
-
