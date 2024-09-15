@@ -2,13 +2,12 @@ import pandas as pd
 import streamlit as st
 from thefuzz import fuzz
 
-# GitHub CSV file URL
-github_url = 'https://raw.githubusercontent.com/aavadhan10/Conflict-Checks/main/combined_contact_and_matters.csv'
+# Load the CSV file
+file_path = '/mnt/data/combined_contact_and_matters.csv'
 
-@st.cache_data  # Use st.cache_data for caching data
+@st.cache_data
 def load_data():
-    # Load the CSV file from GitHub, fill NaN with empty strings to avoid errors
-    return pd.read_csv(github_url).fillna("")
+    return pd.read_csv(file_path).fillna("")
 
 # Streamlit app for conflict check
 st.title("Scale LLP Conflict Check System")
@@ -44,17 +43,11 @@ if st.button("Check for Conflict"):
     results = fuzzy_conflict_check(full_name, email, phone_number)
     
     if not results.empty:
-        # Assume there is a column called 'Matter Number'
-        matter_numbers = results['Matter Number'].unique()  # Change to the actual column name
-        matter_list = ', '.join(map(str, matter_numbers))
-
-        st.success(f"Conflict found! Scale LLP has previously worked with the client. Matter Number(s): {matter_list}")
-
-        # Drop the unnecessary columns (Attorney Name, Practice Area, Matter Number, Description)
-        columns_to_drop = ['Attorney Name', 'Practice Area', 'Matter Number', 'Description']
+        # Drop the unnecessary columns (Attorney, Client, Practice Area, Matter Number, Matter Description)
+        columns_to_drop = ['Attorney', 'Client', 'Practice Area', 'Matter Number', 'Matter Description']
         results_cleaned = results.drop(columns=[col for col in columns_to_drop if col in results.columns])
 
-        # Keep Client Name and other relevant columns
+        st.success(f"Conflict found! Scale LLP has previously worked with the client.")
         st.dataframe(results_cleaned)
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
