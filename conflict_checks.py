@@ -21,7 +21,7 @@ phone_number = st.text_input("Enter Client's Phone Number")
 # Load the CSV data
 data = load_data()
 
-# Function to perform fuzzy conflict check
+# Function to perform fuzzy conflict check and identify the matter numbers
 def fuzzy_conflict_check(full_name, email, phone_number, threshold=80):
     matching_records = pd.DataFrame()
 
@@ -43,7 +43,11 @@ if st.button("Check for Conflict"):
     results = fuzzy_conflict_check(full_name, email, phone_number)
     
     if not results.empty:
-        st.success(f"Conflict found! Scale LLP has previously worked with the client.")
+        # Assume there is a column called 'Matter Number'
+        matter_numbers = results['Matter Number'].unique()  # Change to the actual column name
+        matter_list = ', '.join(map(str, matter_numbers))
+
+        st.success(f"Conflict found! Scale LLP has previously worked with the client. Matter Number(s): {matter_list}")
         st.dataframe(results)
     else:
         st.info("No conflicts found. Scale LLP has not worked with this client.")
