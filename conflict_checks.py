@@ -6,6 +6,10 @@ import sqlite3
 import json
 from urllib.parse import urlencode, urlparse, parse_qs
 
+# ------------------------------
+# 1. Configuration and Initialization
+# ------------------------------
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
@@ -21,6 +25,10 @@ REDIRECT_URI = st.secrets["REDIRECT_URI"]  # Must match the redirect URI set in 
 
 # Initialize SQLite database
 DB_NAME = 'clio_app.db'
+
+# ------------------------------
+# 2. Database Management Functions
+# ------------------------------
 
 def init_db():
     """
@@ -104,6 +112,81 @@ def save_token_to_db(access_token, refresh_token, token_expiry):
     conn.commit()
     conn.close()
 
+def get_refresh_token():
+    """
+    Retrieve the latest refresh token from the database.
+    Returns:
+        refresh_token (str or None)
+    """
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT refresh_token FROM tokens ORDER BY id DESC LIMIT 1')
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    return None
+
+def get_contacts_from_db():
+    """
+    Retrieve all contacts from the database.
+    Returns:
+        contacts (list): List of contact dictionaries.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT data FROM contacts')
+    rows = c.fetchall()
+    conn.close()
+    contacts = [json.loads(row[0]) for row in rows]
+    return contacts
+
+def save_contacts_to_db(contacts):
+    """
+    Save contacts to the database.
+    Args:
+        contacts (list): List of contact dictionaries.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    for contact in contacts:
+        c.execute('INSERT OR REPLACE INTO contacts (id, data) VALUES (?, ?)', 
+                  (contact['id'], json.dumps(contact)))
+    conn.commit()
+    conn.close()
+
+def get_matters_from_db():
+    """
+    Retrieve all matters from the database.
+    Returns:
+        matters (list): List of matter dictionaries.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT data FROM matters')
+    rows = c.fetchall()
+    conn.close()
+    matters = [json.loads(row[0]) for row in rows]
+    return matters
+
+def save_matters_to_db(matters):
+    """
+    Save matters to the database.
+    Args:
+        matters (list): List of matter dictionaries.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    for matter in matters:
+        c.execute('INSERT OR REPLACE INTO matters (id, data) VALUES (?, ?)', 
+                  (matter['id'], json.dumps(matter)))
+    conn.commit()
+    conn.close()
+
+# ------------------------------
+# 3. Token Management Functions
+# ------------------------------
+
 def refresh_access_token(refresh_token):
     """
     Refresh the access token using the provided refresh token.
@@ -146,6 +229,57 @@ def get_valid_token():
     else:
         return access_token
 
+# ------------------------------
+# 4. OAuth Authentication Function
+# ------------------------------
+
+def authenticate():
+    """
+    Handles the OAuth 2.0 Authorization Code Grant flow.
+    """
+    # Check if the user is returning from the authorization server
+    query_params = st.experimental_get_query_params()
+    if 'code' in query_params:
+        code = query_params['code'][0]
+        # Exchange the authorization code for an access token
+        data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        }
+        response = requests.post(TOKEN_URL, data=data)
+        if response.status_code == 200:
+            token_data = response.json()
+            access_token = token_data['access_token']
+            refresh_token = token_data.get('refresh_token')
+            token_expiry = datetime.now() + timedelta(seconds=token_data['expires_in'])
+            save_token_to_db(access_token, refresh_token, token_expiry)
+            st.success("Authentication successful!")
+            # Remove the authorization code from the URL to clean up
+            st.experimental_set_query_params()
+        else:
+            st.error(f"Failed to obtain token: {response.status_code}, {response.text}")
+    
+    # Check if a valid token exists
+    access_token, refresh_token, token_expiry = get_token_from_db()
+    if not access_token or not token_expiry or token_expiry <= datetime.now():
+        auth_params = {
+            "response_type": "code",
+            "client_id": CLIENT_ID,
+            "redirect_uri": REDIRECT_URI,
+            "scope": "read",  # Adjust scopes as necessary
+            "state": "streamlit_app",  # Optional: can be used to prevent CSRF
+        }
+        auth_url = f"{AUTH_URL}?{urlencode(auth_params)}"
+        st.markdown(f"### Please [authorize the application]({auth_url}) to continue.")
+        st.stop()
+
+# ------------------------------
+# 5. API Request Function
+# ------------------------------
+
 def clio_api_request(endpoint, params=None):
     """
     Make an authenticated GET request to the Clio API.
@@ -179,35 +313,65 @@ def clio_api_request(endpoint, params=None):
         st.error(f"Failed to fetch data from Clio: {response.status_code}, {response.text}")
     return None
 
-def fetch_all_pages(endpoint, save_to_db_func):
+# ------------------------------
+# 6. Data Fetching Function with Pagination Limit
+# ------------------------------
+
+def fetch_all_pages(endpoint, save_to_db_func, max_pages=10):
     """
-    Fetch all pages of data from a Clio API endpoint.
+    Fetch all pages of data from a Clio API endpoint up to a maximum number of pages.
+    
     Args:
-        endpoint (str): API endpoint.
+        endpoint (str): API endpoint to fetch data from (e.g., 'contacts', 'matters').
         save_to_db_func (function): Function to save fetched data to the database.
+        max_pages (int): Maximum number of pages to fetch. Defaults to 10.
+        
     Returns:
-        all_data (list): List of all fetched items.
+        list: Accumulated data from all fetched pages.
     """
     all_data = []
     params = {"limit": 100, "page": 1}
-    
+    pages_fetched = 0  # Counter for the number of pages fetched
+
     while True:
+        if pages_fetched >= max_pages:
+            st.warning(f"Reached the maximum page limit of {max_pages}. Stopping data fetch.")
+            break
+
         data = clio_api_request(endpoint, params)
+        
         if data and 'data' in data:
+            fetched_records = len(data['data'])
             all_data.extend(data['data'])
-            st.write(f"Fetched {len(data['data'])} items from {endpoint}, page {params['page']}")
+            pages_fetched += 1
+            st.write(f"Fetched {fetched_records} items from {endpoint}, page {params['page']} (Page {pages_fetched}/{max_pages})")
             
-            if data.get('meta', {}).get('paging', {}).get('next'):
-                params['page'] += 1
+            # Log pagination details for debugging
+            paging = data.get('meta', {}).get('paging', {})
+            current_page = paging.get('current_page')
+            next_page = paging.get('next_page')
+            total_pages = paging.get('total_pages')
+            total_records = paging.get('total_records')
+            
+            st.write(f"Current Page: {current_page}, Next Page: {next_page}, Total Pages: {total_pages}, Total Records: {total_records}")
+            
+            if next_page:
+                params['page'] = next_page
             else:
+                st.write("No more pages to fetch.")
                 break
         else:
+            st.write("No data found or end of data reached.")
             break
-    
+
     # Save fetched data to the database
     save_to_db_func(all_data)
     
     return all_data
+
+# ------------------------------
+# 7. Custom Field Retrieval Function
+# ------------------------------
 
 def get_custom_field_value(contact, field_name):
     """
@@ -222,6 +386,10 @@ def get_custom_field_value(contact, field_name):
         if field['field_name'].lower() == field_name.lower():
             return field['value']
     return None
+
+# ------------------------------
+# 8. Conflict Checking Function
+# ------------------------------
 
 def perform_advanced_conflict_check(new_client_info, contacts, matters):
     """
@@ -294,119 +462,9 @@ def perform_advanced_conflict_check(new_client_info, contacts, matters):
     
     return conflicts
 
-def get_contacts_from_db():
-    """
-    Retrieve all contacts from the database.
-    Returns:
-        contacts (list): List of contact dictionaries.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT data FROM contacts')
-    rows = c.fetchall()
-    conn.close()
-    contacts = [json.loads(row[0]) for row in rows]
-    return contacts
-
-def save_contacts_to_db(contacts):
-    """
-    Save contacts to the database.
-    Args:
-        contacts (list): List of contact dictionaries.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    for contact in contacts:
-        c.execute('INSERT OR REPLACE INTO contacts (id, data) VALUES (?, ?)', 
-                  (contact['id'], json.dumps(contact)))
-    conn.commit()
-    conn.close()
-
-def get_matters_from_db():
-    """
-    Retrieve all matters from the database.
-    Returns:
-        matters (list): List of matter dictionaries.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT data FROM matters')
-    rows = c.fetchall()
-    conn.close()
-    matters = [json.loads(row[0]) for row in rows]
-    return matters
-
-def save_matters_to_db(matters):
-    """
-    Save matters to the database.
-    Args:
-        matters (list): List of matter dictionaries.
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    for matter in matters:
-        c.execute('INSERT OR REPLACE INTO matters (id, data) VALUES (?, ?)', 
-                  (matter['id'], json.dumps(matter)))
-    conn.commit()
-    conn.close()
-
-def get_refresh_token():
-    """
-    Retrieve the latest refresh token from the database.
-    Returns:
-        refresh_token (str or None)
-    """
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT refresh_token FROM tokens ORDER BY id DESC LIMIT 1')
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return row[0]
-    return None
-
-def authenticate():
-    """
-    Handles the OAuth 2.0 Authorization Code Grant flow.
-    """
-    # Check if the user is returning from the authorization server
-    query_params = st.experimental_get_query_params()
-    if 'code' in query_params:
-        code = query_params['code'][0]
-        # Exchange the authorization code for an access token
-        data = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": REDIRECT_URI,
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-        }
-        response = requests.post(TOKEN_URL, data=data)
-        if response.status_code == 200:
-            token_data = response.json()
-            access_token = token_data['access_token']
-            refresh_token = token_data.get('refresh_token')
-            token_expiry = datetime.now() + timedelta(seconds=token_data['expires_in'])
-            save_token_to_db(access_token, refresh_token, token_expiry)
-            st.success("Authentication successful!")
-            # Remove the authorization code from the URL to clean up
-            st.experimental_set_query_params()
-        else:
-            st.error(f"Failed to obtain token: {response.status_code}, {response.text}")
-    
-    # Check if a valid token exists
-    access_token, refresh_token, token_expiry = get_token_from_db()
-    if not access_token or not token_expiry or token_expiry <= datetime.now():
-        auth_params = {
-            "response_type": "code",
-            "client_id": CLIENT_ID,
-            "redirect_uri": REDIRECT_URI,
-            "scope": "read",  # Adjust scopes as necessary
-            "state": "streamlit_app",  # Optional: can be used to prevent CSRF
-        }
-        auth_url = f"{AUTH_URL}?{urlencode(auth_params)}"
-        st.markdown(f"### Please [authorize the application]({auth_url}) to continue.")
-        st.stop()
+# ------------------------------
+# 9. Data Loading Function
+# ------------------------------
 
 def load_data():
     """
@@ -421,9 +479,11 @@ def load_data():
     if not contacts or not matters:
         with st.spinner("Fetching data from Clio..."):
             if not contacts:
-                contacts = fetch_all_pages('contacts', save_contacts_to_db)
+                # Limit to 10 pages for contacts
+                contacts = fetch_all_pages('contacts', save_contacts_to_db, max_pages=10)
             if not matters:
-                matters = fetch_all_pages('matters', save_matters_to_db)
+                # Limit to 10 pages for matters
+                matters = fetch_all_pages('matters', save_matters_to_db, max_pages=10)
         if contacts and matters:
             st.success(f"Loaded {len(contacts)} contacts and {len(matters)} matters from Clio and saved to the database.")
         else:
@@ -433,13 +493,17 @@ def load_data():
     
     return contacts, matters
 
+# ------------------------------
+# 10. Streamlit Application Layout
+# ------------------------------
+
 # Initialize the database
 init_db()
 
 # Authenticate the user
 authenticate()
 
-# Load contacts and matters
+# Load contacts and matters with a limit of 10 pages each
 contacts, matters = load_data()
 
 # Input for new client details
@@ -468,12 +532,12 @@ if st.button("Run Advanced Conflict Check"):
     else:
         st.error("Please enter at least the client's full legal name.")
 
-# Display data statistics
+# Display data statistics in the sidebar
 st.sidebar.title("Data Statistics")
 st.sidebar.write(f"Number of contacts: {len(contacts)}")
 st.sidebar.write(f"Number of matters: {len(matters)}")
 
-# Optional: Add a refresh data button
+# Optional: Add a refresh data button in the sidebar
 if st.sidebar.button("Refresh Clio Data"):
     with st.spinner("Refreshing data from Clio..."):
         # Clear the database tables
@@ -486,7 +550,7 @@ if st.sidebar.button("Refresh Clio Data"):
     st.success("Clio data refreshed successfully.")
     st.experimental_rerun()
 
-# Display token information in sidebar
+# Display token information in the sidebar
 access_token, refresh_token, token_expiry = get_token_from_db()
 if access_token and token_expiry:
     st.sidebar.title("Token Information")
