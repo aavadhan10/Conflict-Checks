@@ -7,8 +7,8 @@ github_url = 'https://raw.githubusercontent.com/aavadhan10/Conflict-Checks/main/
 
 @st.cache
 def load_data():
-    # Load the CSV file from GitHub
-    return pd.read_csv(github_url)
+    # Load the CSV file from GitHub, fill NaN with empty strings to avoid errors
+    return pd.read_csv(github_url).fillna("")
 
 # Streamlit app for conflict check
 st.title("Law Firm Conflict Check System")
@@ -26,10 +26,13 @@ def fuzzy_conflict_check(full_name, email, phone_number, threshold=80):
     matching_records = pd.DataFrame()
 
     for index, row in data.iterrows():
-        # Fuzzy match for the client name
-        name_match = fuzz.partial_ratio(row['Client Name'], full_name)
+        # Ensure the 'Client Name' field is a string before performing the fuzzy match
+        client_name = str(row['Client Name'])
 
-        # We don't have email or phone fields, so we check only names
+        # Fuzzy match for the client name
+        name_match = fuzz.partial_ratio(client_name, full_name)
+
+        # Add matching records if the name similarity exceeds the threshold
         if name_match >= threshold:
             matching_records = matching_records.append(row)
 
