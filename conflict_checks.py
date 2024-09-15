@@ -1,118 +1,70 @@
+import pandas as pd
+import requests
+import json
 import streamlit as st
-from thefuzz import fuzz
-import re
 
-# File path to the CSV from GitHub
-file_path = 'https://raw.githubusercontent.com/aavadhan10/Conflict-Checks/main/combined_contact_and_matters.csv'
+# Load the data
+def load_data(file_url):
+    data = pd.read_csv(file_url)
+    return data
 
-@st.cache_data
-def load_data():
-    # Load the CSV file from GitHub, fill NaN with empty strings to avoid errors
-    return pd.read_csv(file_path).fillna("")
-
-# Function to perform fuzzy conflict check and identify the matter numbers
-def fuzzy_conflict_check(full_name, email, phone_number, threshold=80):
-    matching_records = []
-    for index, row in data.iterrows():
-        client_name = str(row['Client Name'])
-        name_match = fuzz.partial_ratio(client_name, full_name)
-        if name_match >= threshold:
-            matching_records.append(row)
-    return pd.DataFrame(matching_records)
-
-# Function to check for potential conflicts in matter descriptions
-def check_matter_conflicts(matching_records, full_name):
-    direct_conflicts = []
-    positional_conflicts = []
-    personal_conflicts = []
-
-    for index, row in matching_records.iterrows():
-        matter_description = str(row['Matter Description']).lower()
-        client_name = row['Client Name'].lower()
-
-        # Direct Conflicts
-        if full_name.lower() in matter_description:
-            direct_conflicts.append(row)
-
-        # Personal Conflicts (if any specific names of attorneys or clients are mentioned)
-        if any(name in matter_description for name in [full_name.lower()]):
-            personal_conflicts.append(row)
-        
-        # Example positional conflicts (this may need more sophisticated logic)
-        if re.search(r'\b(?:opposing|adverse)\b', matter_description):
-            positional_conflicts.append(row)
-
-    return pd.DataFrame(direct_conflicts), pd.DataFrame(positional_conflicts), pd.DataFrame(personal_conflicts)
+# Call Claude Sonnet API
+def call_claude_sonnet(prompt, api_key):
+    url = "https://api.anthropic.com/v1/complete"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": "claude-3.5",
+        "prompt": prompt,
+        "max_tokens": 500,
+        "temperature": 0.7
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    response_json = response.json()
+    return response_json['completion']
 
 # Streamlit app
-st.title("Scale LLP Conflict Check System")
+st.title("Conflict Check with Claude Sonnet 3.5")
 
-# Input fields for client information
-full_name = st.text_input("Enter Client's Full Name")
-email = st.text_input("Enter Client's Email")
-phone_number = st.text_input("Enter Client's Phone Number")
+# Load and display the data
+data_url = "https://github.com/aavadhan10/Conflict-Checks/blob/main/combined_contact_and_matters.csv"
+data = load_data(data_url)
 
-# Load the CSV data
-data = load_data()
+st.write("### Data Preview")
+st.write(data.head())
 
-# Buttons
-col1, col2 = st.columns([2, 1])
-with col1:
-    conflict_check_clicked = st.button("Check for Conflict")
+# User input
+user_name = st.text_input("Enter the client's full name:")
+user_email = st.text_input("Enter the client's email:")
+user_phone = st.text_input("Enter the client's phone number:")
 
-with col2:
-    create_graph_clicked = st.button("Create Relationship Graph", disabled=not conflict_check_clicked)
+# Check for conflicts
+if st.button("Check for Conflicts"):
+    if user_name or user_email or user_phone:
+        # Construct the prompt for Claude
+        prompt = f"""
+        Analyze the following data for any conflicts involving a client:
+        Name: {user_name}
+        Email: {user_email}
+        Phone: {user_phone}
 
-if conflict_check_clicked:
-    results = fuzzy_conflict_check(full_name, email, phone_number)
-    
-    if not results.empty:
-        # Drop the unnecessary columns (Attorney, Client, Practice Area, Matter Number, Matter Description)
-        columns_to_drop = ['Attorney', 'Client', 'Practice Area', 'Matter Number', 'Matter Description']
-        results_cleaned = results.drop(columns=[col for col in columns_to_drop if col in results.columns])
-        
-        # Conflict Analysis
-        direct_conflicts, positional_conflicts, personal_conflicts = check_matter_conflicts(results, full_name)
+        Data:
+        {data.to_string(index=False)}
 
-        # Display conflict results
-        st.success(f"Conflict found! Scale LLP has previously worked with the client.")
-        st.dataframe(results_cleaned)
+        Please provide a detailed conflict check report.
+        """
 
-        if not direct_conflicts.empty:
-            st.subheader("Direct Conflicts")
-            st.dataframe(direct_conflicts)
-        
-        if not positional_conflicts.empty:
-            st.subheader("Positional Conflicts")
-            st.dataframe(positional_conflicts)
+        api_key = st.secrets["CLAUDE_API_KEY"]
+        if not api_key:
+            st.error("Claude API key not found. Please check your Streamlit secrets configuration.")
+            st.stop()
 
-        if not personal_conflicts.empty:
-            st.subheader("Personal Conflicts")
-            st.dataframe(personal_conflicts)
-        
+        # Call Claude and get the result
+        result = call_claude_sonnet(prompt, api_key)
+        st.write("### Conflict Check Report")
+        st.write(result)
     else:
-        st.info("No conflicts found. Scale LLP has not worked with this client.")
+        st.error("Please provide at least one piece of client information.")
 
-# Generate the relationship graph when the "Create Relationship Graph" button is clicked
-if create_graph_clicked and not results.empty:
-    # Create a graph for relationships
-    G = create_relationship_graph(data)
-
-    # Visualize the graph using Pyvis
-    net = visualize_graph(G)
-
-    # Show the graph in Streamlit
-    net.save_graph('relationship_graph.html')
-    HtmlFile = open('relationship_graph.html', 'r', encoding='utf-8')
-    source_code = HtmlFile.read()
-    components.html(source_code, height=800)
-
-# Sidebar
-st.sidebar.title("📊 Data Overview")
-num_matters = len(data)
-st.sidebar.markdown(f"<h2 style='color: #4CAF50;'>Number of Matters Worked with: {num_matters}</h2>", unsafe_allow_html=True)
-st.sidebar.markdown(
-    "<div style='background-color: #f0f0f5; padding: 10px; border-radius: 5px; border: 1px solid #ccc;'>"
-    "<strong>Data Updated from Clio API</strong><br>Last Update: <strong>9/14/2024</strong>"
-    "</div>", unsafe_allow_html=True
-) 
