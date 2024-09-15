@@ -3,7 +3,7 @@ import streamlit as st
 from thefuzz import fuzz
 
 # Load the CSV file
-file_path = '/mnt/data/combined_contact_and_matters.csv'
+file_path = 'https://raw.githubusercontent.com/aavadhan10/Conflict-Checks/main/combined_contact_and_matters.csv'
 
 @st.cache_data
 def load_data():
