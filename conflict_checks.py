@@ -199,7 +199,7 @@ with col1:
                 
                 # Display the conflict message in green if a conflict is found
                 if "Conflict found" in conflict_message or "Potential conflict found" in conflict_message:
-                    st.markdown(f"<span style='color:green;'>{conflict_message}</span>", unsafe_allow_html=True)
+                    st.success(conflict_message)
                 else:
                     st.write(conflict_message)
                 
