@@ -196,7 +196,12 @@ with col1:
                 )
                 
                 st.write("### Conflict Check Results:")
-                st.write(conflict_message)
+                
+                # Display the conflict message in green if a conflict is found
+                if "Conflict found" in conflict_message or "Potential conflict found" in conflict_message:
+                    st.markdown(f"<span style='color:green;'>{conflict_message}</span>", unsafe_allow_html=True)
+                else:
+                    st.write(conflict_message)
                 
                 if client_details:
                     st.write("#### Client Details:")
